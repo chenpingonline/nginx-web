@@ -177,6 +177,9 @@ func (m *Manager) Update(id string, update UpdateInput) (Job, error) {
 	if update.Retry {
 		// Keep the existing retry cooldown; editing must not bypass CA rate limits.
 		if retryCoolingDown(stored, m.now()) {
+			if stored.Job.FailureCode == "ca_rate_limit" {
+				return Job{}, errors.New("证书机构限制了申请频率，请等待冷却时间结束；可以先保存配置")
+			}
 			return Job{}, errors.New("请至少间隔一分钟再重试；可以先保存配置")
 		}
 		r.Job.Enabled, r.Job.Status, r.Job.Failures = true, "queued", 0
@@ -192,6 +195,9 @@ func (m *Manager) Update(id string, update UpdateInput) (Job, error) {
 }
 
 func retryCoolingDown(r *Record, now time.Time) bool {
+	if r.Job.FailureCode == "ca_rate_limit" && now.Before(r.Job.NextAttempt) {
+		return true
+	}
 	if r.LastAttemptAt != nil {
 		return now.Before(r.LastAttemptAt.Add(time.Minute))
 	}

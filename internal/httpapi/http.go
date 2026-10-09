@@ -315,6 +315,15 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 			writeResult(w, http.StatusAccepted, job, err)
 			return
 		}
+		if r.Method == http.MethodPost && action == "diagnose" {
+			result, err := a.service.ACME().Diagnose(r.Context(), parts[0])
+			if errors.Is(err, acmemanager.ErrNotFound) {
+				writeAPIError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeResult(w, http.StatusOK, result, err)
+			return
+		}
 		err := a.service.ACME().Action(parts[0], action)
 		writeResult(w, http.StatusOK, map[string]bool{"ok": err == nil}, err)
 	case apiPath == "/api/certificates" && r.Method == http.MethodGet:

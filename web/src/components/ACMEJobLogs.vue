@@ -39,7 +39,7 @@ async function load() {
   finally { loading.value = false; if (!stopped) timer = setTimeout(() => void load(), 3000); }
 }
 function exportLogs() {
-  const text = runs.value.map(run => `${date(run.started_at)} ${kinds[run.kind]} ${statuses[run.status]}\n${run.entries.map(entry => `${date(entry.time)} [${entry.level}] ${entry.message}${entry.code ? ` (${entry.code})` : ''}${entry.hint ? `；建议：${entry.hint}` : ''}`).join('\n')}`).join('\n\n');
+  const text = runs.value.map(run => `${date(run.started_at)} ${kinds[run.kind]} ${statuses[run.status]}${run.omitted_entries ? `（省略 ${run.omitted_entries} 条较早日志）` : ''}\n${run.entries.map(entry => `${date(entry.time)} [${entry.level}] ${entry.message}${entry.code ? ` (${entry.code})` : ''}${entry.hint ? `；建议：${entry.hint}` : ''}${entry.detail ? `；域名：${entry.detail.fqdn || entry.detail.domain || '—'}；DNS：${entry.detail.resolver || '—'}；第 ${entry.detail.attempt || 0} 次；耗时 ${entry.detail.elapsed_ms} ms；结果 ${entry.detail.result}` : ''}`).join('\n')}`).join('\n\n');
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
   const link = document.createElement('a'); link.href = url; link.download = `acme-${props.id}.txt`; link.click(); URL.revokeObjectURL(url);
 }
@@ -57,8 +57,9 @@ onBeforeUnmount(() => { stopped = true; clearTimeout(timer); controller?.abort()
         <label for="acme-run">执行记录</label>
         <AppSelect id="acme-run" class="select" :model-value="selected.id" @update:model-value="choose"><option v-for="run in [...runs].reverse()" :key="run.id" :value="run.id">{{ date(run.started_at) }} · {{ kinds[run.kind] }} · {{ statuses[run.status] }}</option></AppSelect>
         <div class="log-summary"><span>耗时：{{ duration }}{{ selected.finished_at ? '' : ' · 执行中' }}</span><label class="checkbox-row"><input v-model="following" type="checkbox" />跟随最新日志</label></div>
+        <p v-if="selected.omitted_entries" class="field-help">已省略 {{ selected.omitted_entries }} 条较早日志，保留开始和最新记录。</p>
         <ol ref="entries" class="log-entries" aria-label="执行阶段日志" @wheel="following = false">
-          <li v-for="(entry, index) in selected.entries" :key="index" :class="entry.level"><time>{{ date(entry.time) }}</time><div><strong>{{ entry.message }}</strong><small v-if="entry.code">错误类别：{{ entry.code }}</small><p v-if="entry.hint">建议：{{ entry.hint }}</p></div></li>
+          <li v-for="(entry, index) in selected.entries" :key="index" :class="entry.level"><time>{{ date(entry.time) }}</time><div><strong>{{ entry.message }}</strong><small v-if="entry.code">错误类别：{{ entry.code }}</small><p v-if="entry.hint">建议：{{ entry.hint }}</p><p v-if="entry.detail" class="log-detail"><span v-if="entry.detail.fqdn || entry.detail.domain">域名：{{ entry.detail.fqdn || entry.detail.domain }}</span><span v-if="entry.detail.resolver">DNS：{{ entry.detail.resolver }}</span><span v-if="entry.detail.attempt">第 {{ entry.detail.attempt }} 次检查</span><span>耗时 {{ entry.detail.elapsed_ms }} ms</span></p></div></li>
         </ol>
       </template>
     </div>
@@ -77,6 +78,7 @@ onBeforeUnmount(() => { stopped = true; clearTimeout(timer); controller?.abort()
 .log-entries strong { font-weight: 550; }
 .log-entries small { display: block; margin-top: 4px; }
 .log-entries p { margin: 5px 0 0; }
+.log-detail { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--text-muted); }
 .log-entries .error { color: var(--danger); }
 .log-entries .success { color: var(--accent-dark); }
 .log-entries .warning { color: var(--danger); }

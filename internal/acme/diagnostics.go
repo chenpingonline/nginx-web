@@ -15,9 +15,11 @@ import (
 // Only application-owned messages leave the issuer. Provider errors may contain
 // credentials, signed URLs, DNS challenges and response bodies.
 type Diagnostic struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Hint    string `json:"hint"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	Hint              string `json:"hint"`
+	Stage             string `json:"stage,omitempty"`
+	RetryAfterSeconds int64  `json:"retry_after_seconds,omitempty"`
 }
 
 func (d *Diagnostic) Error() string { return d.Message + "；" + d.Hint }
@@ -33,6 +35,16 @@ func diagnostic(code string) *Diagnostic {
 		d.Message, d.Hint = "找不到域名对应的 DNS Zone", "确认域名托管在所选服务商、Zone 可被凭据访问，且权威 DNS 配置正确"
 	case "dns_propagation":
 		d.Message, d.Hint = "DNS 验证记录未及时生效", "检查权威 DNS、CNAME 和 TXT 记录解析；必要时增加 DNS 等待时间"
+	case "dns_query_timeout":
+		d.Message, d.Hint = "DNS 查询超时", "检查 NAS 到日志中 DNS 服务器的 UDP/TCP 53 连通性；可配置独立 ACME DNS 服务器"
+	case "dns_query_refused":
+		d.Message, d.Hint = "DNS 服务器拒绝查询", "检查 DNS 访问策略；可改用允许递归查询的独立 ACME DNS 服务器"
+	case "dns_servfail":
+		d.Message, d.Hint = "DNS 服务器解析失败（SERVFAIL）", "检查上游 DNS、域名委派及 DNSSEC，或更换 ACME DNS 服务器后重试"
+	case "dns_no_txt":
+		d.Message, d.Hint = "未查询到 DNS TXT 验证记录", "检查公网 TXT 是否已创建，以及局域网通配符规则是否拦截 TXT 查询"
+	case "dns_txt_mismatch":
+		d.Message, d.Hint = "DNS TXT 记录与本次验证不匹配", "检查 DNS 缓存、CNAME 委派和传播状态；不要手工复制其他申请的验证值"
 	case "ca_rate_limit":
 		d.Message, d.Hint = "证书机构限制了申请频率", "等待证书机构限制恢复后重试，避免频繁重新签发"
 	case "ca_account":
@@ -59,10 +71,22 @@ func diagnostic(code string) *Diagnostic {
 	return d
 }
 
-func classifyError(err error, stage string) *Diagnostic {
+func classifyError(err error, stage string) (result *Diagnostic) {
+	defer func() {
+		if result != nil && result.Stage == "" {
+			result.Stage = safeStage(stage)
+		}
+	}()
 	var known *Diagnostic
 	if errors.As(err, &known) {
-		return diagnostic(known.Code)
+		d := diagnostic(known.Code)
+		if known.Stage != "" {
+			d.Stage = safeStage(known.Stage)
+		}
+		if known.RetryAfterSeconds > 0 && known.RetryAfterSeconds <= 365*24*60*60 {
+			d.RetryAfterSeconds = known.RetryAfterSeconds
+		}
+		return d
 	}
 	if errors.Is(err, context.Canceled) {
 		return diagnostic("interrupted")
@@ -75,6 +99,14 @@ func classifyError(err error, stage string) *Diagnostic {
 		return diagnostic("storage")
 	}
 	var problem *legoacme.ProblemDetails
+	var rateLimit *legoacme.RateLimitedError
+	if errors.As(err, &rateLimit) {
+		d := diagnostic("ca_rate_limit")
+		if rateLimit.RetryAfter > 0 && rateLimit.RetryAfter <= 365*24*time.Hour {
+			d.RetryAfterSeconds = int64((rateLimit.RetryAfter + time.Second - 1) / time.Second)
+		}
+		return d
+	}
 	if errors.As(err, &problem) {
 		switch {
 		case problem.HTTPStatus == 429 || strings.HasSuffix(problem.Type, ":rateLimited"):
@@ -106,6 +138,9 @@ func classifyError(err error, stage string) *Diagnostic {
 		}
 	}
 	if strings.Contains(s, "propagation") || strings.Contains(s, "time limit exceeded") {
+		if code := dnsErrorCode(err); code != "dns_pending" {
+			return diagnostic(code)
+		}
 		return diagnostic("dns_propagation")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -126,19 +161,21 @@ func classifyError(err error, stage string) *Diagnostic {
 }
 
 type LogEntry struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
-	Code    string    `json:"code,omitempty"`
-	Hint    string    `json:"hint,omitempty"`
+	Time    time.Time     `json:"time"`
+	Level   string        `json:"level"`
+	Message string        `json:"message"`
+	Code    string        `json:"code,omitempty"`
+	Hint    string        `json:"hint,omitempty"`
+	Detail  *DNSLogDetail `json:"detail,omitempty"`
 }
 type Run struct {
-	ID         string     `json:"id"`
-	Kind       string     `json:"kind"`
-	StartedAt  time.Time  `json:"started_at"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Status     string     `json:"status"`
-	Entries    []LogEntry `json:"entries"`
+	ID             string     `json:"id"`
+	Kind           string     `json:"kind"`
+	StartedAt      time.Time  `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	Status         string     `json:"status"`
+	Entries        []LogEntry `json:"entries"`
+	OmittedEntries int        `json:"omitted_entries,omitempty"`
 }
 
 const maxRuns = 20
@@ -146,11 +183,15 @@ const maxEntries = 200
 
 func safeStage(message string) string {
 	switch message {
-	case "准备申请", "连接证书机构", "注册 ACME 账户", "检查续期时间", "初始化 DNS 服务商", "DNS 验证与证书签发", "创建 DNS TXT 记录", "DNS TXT 记录已创建", "等待 DNS TXT 记录生效", "DNS 记录已生效，提交 CA 验证", "清理 DNS TXT 记录", "DNS TXT 记录已清理", "DNS TXT 清理失败，请检查服务商权限和残留记录", "证书签发成功", "部署证书":
+	case "准备申请", "准备部署", "连接证书机构", "注册 ACME 账户", "检查续期时间", "初始化 DNS 服务商", "DNS 验证与证书签发", "创建 DNS TXT 记录", "DNS TXT 记录已创建", "等待 DNS TXT 记录生效", "DNS 记录已生效，提交 CA 验证", "清理 DNS TXT 记录", "DNS TXT 记录已清理", "DNS TXT 清理失败，请检查服务商权限和残留记录", "证书签发成功", "部署证书":
 		return message
 	default:
 		return "申请处理中"
 	}
+}
+
+func cleanupStage(stage string) bool {
+	return stage == "清理 DNS TXT 记录" || stage == "DNS TXT 记录已清理" || stage == "DNS TXT 清理失败，请检查服务商权限和残留记录"
 }
 
 func appendEntry(r *Record, at time.Time, level, message string, d *Diagnostic) {
@@ -163,6 +204,7 @@ func appendEntry(r *Record, at time.Time, level, message string, d *Diagnostic) 
 		entry.Code, entry.Hint = d.Code, d.Hint
 	}
 	if len(run.Entries) >= maxEntries {
+		run.OmittedEntries++
 		// Keep the beginning and the most recent events, including the outcome.
 		run.Entries = append(run.Entries[:1], run.Entries[2:]...)
 	}

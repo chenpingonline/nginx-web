@@ -90,6 +90,12 @@ func TestACMEAPIProtectsCredentialsAndRequiresAdmin(t *testing.T) {
 	if response := call(http.MethodGet, "/api/acme/missing/logs", "", true); response.Code != 404 {
 		t.Fatal("missing logs did not return 404")
 	}
+	if response := call(http.MethodPost, "/api/acme/"+job.ID+"/diagnose", "", false); response.Code != 403 {
+		t.Fatal("unauthorized diagnostics accepted", response.Code)
+	}
+	if response := call(http.MethodPost, "/api/acme/missing/diagnose", "", true); response.Code != 404 {
+		t.Fatal("missing diagnostics did not return 404", response.Code)
+	}
 	for _, path := range []string{"/api/acme", "/api/state", "/api/revisions"} {
 		w = call(http.MethodGet, path, "", true)
 		if w.Code != 200 || strings.Contains(w.Body.String(), "never-return-this") || strings.Contains(w.Body.String(), "credentials") {

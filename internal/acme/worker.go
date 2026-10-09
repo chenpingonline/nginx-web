@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-acme/lego/v5/challenge"
@@ -22,6 +23,7 @@ type workerMessage struct {
 	Done       bool        `json:"done,omitempty"`
 	OK         bool        `json:"ok,omitempty"`
 	Error      *Diagnostic `json:"error,omitempty"`
+	Log        *LogEntry   `json:"log,omitempty"`
 }
 
 // Every native factory runs in a separate process because upstream reads process
@@ -105,6 +107,9 @@ func issueInWorker(ctx context.Context, r *Record, checkpoint func() error, prog
 		if message.Stage != "" {
 			progress(message.Stage)
 		}
+		if message.Log != nil {
+			emitLog(ctx, *message.Log)
+		}
 		if message.Record != nil {
 			// Preserve the parent's live history and public job. Only issuer
 			// checkpoints (never configuration or logs) travel back from the child.
@@ -122,7 +127,7 @@ func issueInWorker(ctx context.Context, r *Record, checkpoint func() error, prog
 		if message.Done {
 			if !message.OK {
 				if message.Error != nil {
-					return diagnostic(message.Error.Code)
+					return classifyError(message.Error, message.Error.Stage)
 				}
 				return diagnostic("issuance")
 			}
@@ -150,10 +155,26 @@ func runWorker(options []dns01.ChallengeOption) int {
 		return 1
 	}
 	output := json.NewEncoder(out)
+	var outputMu sync.Mutex
+	send := func(message workerMessage) error {
+		outputMu.Lock()
+		defer outputMu.Unlock()
+		return output.Encode(message)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer cancel()
+	ctx = withLogSink(ctx, func(entry LogEntry) { _ = send(workerMessage{Log: &entry}) })
+	if len(r.Input.DNSResolvers) > 0 {
+		configureDNSClient(r.Input)
+	}
+	for _, resolver := range resolverAddresses(r.Input) {
+		dnsLog(ctx, "", "", resolver, 0, time.Now(), "dns_resolver")
+	}
+	if r.Input.DNSCheckMode == "wait" {
+		options = append(options, dns01.WrapPreCheck(fixedWaitCheck(time.Duration(r.Input.DNSWaitSeconds)*time.Second)))
+	}
 	checkpoint := func() error {
-		if err := output.Encode(workerMessage{Record: &r, Checkpoint: true}); err != nil {
+		if err := send(workerMessage{Record: &r, Checkpoint: true}); err != nil {
 			return err
 		}
 		var ok bool
@@ -166,7 +187,16 @@ func runWorker(options []dns01.ChallengeOption) int {
 		return nil
 	}
 	stage := "准备申请"
-	progress := func(message string) { stage = safeStage(message); _ = output.Encode(workerMessage{Stage: stage}) }
+	var stageMu sync.Mutex
+	progress := func(message string) {
+		stageMu.Lock()
+		defer stageMu.Unlock()
+		message = safeStage(message)
+		if !cleanupStage(message) {
+			stage = message
+		}
+		_ = send(workerMessage{Stage: message})
+	}
 	factory := func(in Input) (challenge.Provider, error) {
 		progress("初始化 DNS 服务商")
 		return newNativeDNSProvider(in.Provider)
@@ -174,9 +204,11 @@ func runWorker(options []dns01.ChallengeOption) int {
 	err := issueWithDNS(ctx, &r, checkpoint, progress, factory, options)
 	var detail *Diagnostic
 	if err != nil {
+		stageMu.Lock()
 		detail = classifyError(err, stage)
+		stageMu.Unlock()
 	}
-	if output.Encode(workerMessage{Record: &r, Done: true, OK: err == nil, Error: detail}) != nil {
+	if send(workerMessage{Record: &r, Done: true, OK: err == nil, Error: detail}) != nil {
 		return 1
 	}
 	if err != nil {

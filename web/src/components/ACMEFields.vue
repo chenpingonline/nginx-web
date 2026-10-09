@@ -13,6 +13,7 @@ const advanced = ref(false);
 const configured = (path: string) => props.configuredSecrets?.includes(path) ?? false;
 const clearing = (path: string) => props.clearSecrets?.includes(path) ?? false;
 const secretPlaceholder = (path: string) => clearing(path) ? '保存后清除' : configured(path) ? '已配置，留空保留；填写新值替换' : '';
+const resolvers = computed({ get: () => (props.modelValue.dns_resolvers ?? []).join('\n'), set: (value: string) => set('dns_resolvers', value.split(/[\s,，]+/).filter(Boolean)) });
 const domains = computed({ get: () => props.modelValue.domains.join('\n'), set: (value: string) => set('domains', value.split('\n')) });
 
 const catalog = ref<DNSCatalog>();
@@ -100,12 +101,24 @@ const providerLink = computed(() => selected.value && dnsProviderLink(selected.v
   <div class="field full"><label for="acme-email">电子邮箱</label><input id="acme-email" class="input" type="email" required :value="modelValue.email" :disabled="busy" @input="set('email', ($event.target as HTMLInputElement).value)" /></div>
   <div class="field full"><label for="acme-key-type">密钥算法</label><AppSelect id="acme-key-type" :model-value="modelValue.key_type" class="select" :disabled="busy" @update:model-value="set('key_type', $event)"><option value="rsa2048">RSA 2048</option><option value="rsa4096">RSA 4096</option><option value="ec256">ECDSA P-256</option><option value="ec384">ECDSA P-384</option></AppSelect></div>
   <div class="field full"><label for="acme-dns-timeout">DNS 等待时间（秒）</label><input id="acme-dns-timeout" class="input" type="number" min="30" max="1800" required :value="modelValue.propagation_seconds" :disabled="busy" @input="set('propagation_seconds', Number(($event.target as HTMLInputElement).value))" /></div>
+  <div class="field full"><label for="acme-resolvers">ACME DNS 服务器</label><textarea id="acme-resolvers" v-model="resolvers" class="textarea" rows="2" :disabled="busy" spellcheck="false" placeholder="223.5.5.5&#10;223.6.6.6" /><span class="field-help">每行一个 IP，可带端口。留空使用 NAS 系统 DNS；局域网通配符解析可能干扰验证，可填写独立 DNS。仅影响本任务，不修改 NAS 网络设置。</span></div>
+  <details class="full acme-dns-options">
+    <summary>DNS 验证高级选项</summary>
+    <div class="field full"><label for="acme-check-mode">本地预检查</label><AppSelect id="acme-check-mode" :model-value="modelValue.dns_check_mode ?? 'auto'" class="select" :disabled="busy" @update:model-value="set('dns_check_mode', $event as 'auto' | 'wait')"><option value="auto">自动检查 DNS 记录（推荐）</option><option value="wait">固定等待，跳过本地预检查</option></AppSelect></div>
+    <template v-if="modelValue.dns_check_mode === 'wait'">
+      <div class="field full"><label for="acme-fixed-wait">固定等待时间（秒）</label><input id="acme-fixed-wait" class="input" type="number" min="30" max="600" required :value="modelValue.dns_wait_seconds ?? 60" :disabled="busy" @input="set('dns_wait_seconds', Number(($event.target as HTMLInputElement).value))" /></div>
+      <p class="notice warning">创建 TXT 后按此时间等待。Let’s Encrypt / CA 仍会独立验证公网 DNS；记录未生效时申请仍会失败。建议先配置可用的独立 DNS。</p>
+    </template>
+  </details>
   <label class="checkbox-row full"><input type="checkbox" :checked="modelValue.rotate_key" :disabled="busy" @change="set('rotate_key', ($event.target as HTMLInputElement).checked)" />每次续期更换私钥</label>
   <label class="checkbox-row full"><input type="checkbox" required :checked="modelValue.accept_terms" :disabled="busy" @change="set('accept_terms', ($event.target as HTMLInputElement).checked)" />我同意所选证书机构的服务条款，并授权自动申请和续期</label>
   <span class="field-help full"><a v-if="modelValue.ca === 'letsencrypt'" href="https://letsencrypt.org/repository/" target="_blank" rel="noopener noreferrer">查看 Let’s Encrypt 服务条款</a><a v-else-if="modelValue.ca === 'zerossl'" href="https://zerossl.com/terms/" target="_blank" rel="noopener noreferrer">查看 ZeroSSL 服务条款</a><template v-else>请向自定义证书机构确认服务条款。</template> 申请在后台执行；签发后可绑定到代理规则，后续自动续期。</span>
 </template>
 
 <style scoped>
+.acme-dns-options { display: block; }
+.acme-dns-options summary { cursor: pointer; margin-bottom: 12px; }
+.acme-dns-options > .field { margin-block: 10px; }
 .dns-provider-fields { min-width: 0; display: grid; grid-template-columns: subgrid; row-gap: 10px; }
 .dns-provider-fields > p { margin: 0; grid-column: 1 / -1; }
 .dns-provider-field { min-width: 0; }

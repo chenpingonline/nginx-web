@@ -321,6 +321,10 @@ func TestReissueDomainsPreservesCredentialsAndCertificate(t *testing.T) {
 		r.Pending = true
 		return nil
 	}
+	if _, err = m.Reissue(j.ID, job.Domains); err == nil {
+		t.Fatal("reissue bypassed retry cooldown")
+	}
+	m.now = func() time.Time { return time.Now().Add(time.Minute) }
 	if _, err = m.Reissue(j.ID, job.Domains); err != nil {
 		t.Fatal(err)
 	}

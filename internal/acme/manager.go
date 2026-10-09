@@ -91,6 +91,14 @@ func New(dir string, deploy DeployFunc) (*Manager, error) {
 				return nil, err
 			}
 		} else {
+			r.Job.DeploymentPending = r.Pending
+			if r.LastAttemptAt != nil {
+				at := r.LastAttemptAt.Add(time.Minute)
+				if r.Job.FailureCode == "ca_rate_limit" && r.Job.NextAttempt.After(at) {
+					at = r.Job.NextAttempt
+				}
+				r.Job.RetryAfter = &at
+			}
 			m.records[r.Job.ID] = &r
 		}
 	}
@@ -103,6 +111,14 @@ func clone(r *Record) *Record {
 	return &c
 }
 func (m *Manager) save(r *Record) error {
+	r.Job.DeploymentPending = r.Pending
+	if r.LastAttemptAt != nil {
+		at := r.LastAttemptAt.Add(time.Minute)
+		if r.Job.FailureCode == "ca_rate_limit" && r.Job.NextAttempt.After(at) {
+			at = r.Job.NextAttempt
+		}
+		r.Job.RetryAfter = &at
+	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -161,6 +177,9 @@ func (m *Manager) Reissue(id string, domains []string) (Job, error) {
 	if m.active == id {
 		return Job{}, errors.New("任务执行中，请等待完成后修改")
 	}
+	if retryCoolingDown(stored, m.now()) {
+		return Job{}, errors.New("请等待重试冷却结束后再重新签发")
+	}
 	r := clone(stored)
 	r.Input.Domains = append([]string(nil), domains...)
 	if err := validate(&r.Input); err != nil {
@@ -206,24 +225,45 @@ func (m *Manager) Action(id, action string) error {
 	}
 	r = clone(r)
 	switch action {
-	case "retry":
+	case "retry", "retry_deploy":
+		if action == "retry_deploy" && !r.Pending {
+			return errors.New("没有待部署的证书，请使用重试申请或立即续期")
+		}
+		if action == "retry_deploy" {
+			if cert, err := leaf(r.Resource); err != nil || !cert.NotAfter.After(m.now()) {
+				return errors.New("待部署证书已失效，请编辑配置后重新申请")
+			}
+		}
 		if !r.Job.Enabled {
 			return errors.New("请先启用自动续期")
 		}
 		if retryCoolingDown(r, m.now()) {
+			if r.Job.FailureCode == "ca_rate_limit" {
+				return errors.New("证书机构限制了申请频率，请等待任务显示的冷却时间结束")
+			}
 			return errors.New("请至少间隔一分钟再重试")
 		}
 		r.Job.NextAttempt = m.now()
 		r.Job.Status = "queued"
 		r.Force = true
-		r.Job.Message = "等待执行"
+		if r.Pending {
+			r.Job.Message = "等待重试部署，复用已签发证书"
+		} else {
+			r.Job.Message = "等待执行"
+		}
 	case "pause":
 		r.Job.Enabled = false
-		r.Job.Message = "自动续期已暂停"
+		if r.Job.Status != "failed" {
+			r.Job.Message = "自动续期已暂停"
+		}
 	case "resume":
 		r.Job.Enabled = true
-		r.Job.NextAttempt = m.now()
-		r.Job.Message = "自动续期已启用"
+		if r.Job.FailureCode != "ca_rate_limit" || !r.Job.NextAttempt.After(m.now()) {
+			r.Job.NextAttempt = m.now()
+		}
+		if r.Job.Status != "failed" {
+			r.Job.Message = "自动续期已启用"
+		}
 	case "delete":
 		if err := os.Remove(filepath.Join(m.dir, id+".json")); err != nil {
 			return err
@@ -310,9 +350,14 @@ func (m *Manager) step(ctx context.Context) {
 	if len(r.Runs) > maxRuns {
 		r.Runs = r.Runs[len(r.Runs)-maxRuns:]
 	}
-	appendEntry(r, m.now(), "info", "准备申请", nil)
+	initialStage := "准备申请"
+	if kind == "deploy" {
+		initialStage = "准备部署"
+	}
+	appendEntry(r, m.now(), "info", initialStage, nil)
+	r.Job.FailureCode, r.Job.FailureStage, r.Job.CleanupMessage = "", "", ""
 	r.Job.Status = "running"
-	r.Job.Message = "准备申请"
+	r.Job.Message = initialStage
 	r.Job.UpdatedAt = m.now()
 	if err := m.save(r); err != nil {
 		m.active = ""
@@ -321,10 +366,16 @@ func (m *Manager) step(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	checkpoint := func() error { m.mu.Lock(); defer m.mu.Unlock(); return m.save(r) }
+	failureStage := initialStage
 	progress := func(message string) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		message = safeStage(message)
+		if cleanupStage(message) {
+			r.Job.CleanupMessage = message
+		} else {
+			failureStage = message
+		}
 		r.Job.Message, r.Job.UpdatedAt = message, m.now()
 		level := "info"
 		if message == "DNS TXT 清理失败，请检查服务商权限和残留记录" {
@@ -335,6 +386,12 @@ func (m *Manager) step(ctx context.Context) {
 	}
 	workCtx, cancel := context.WithTimeout(ctx, 35*time.Minute)
 	defer cancel()
+	workCtx = withLogSink(workCtx, func(entry LogEntry) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		appendDiagnostic(r, entry)
+		_ = m.save(r)
+	})
 	var err error
 	if r.Pending {
 		if c, e := leaf(r.Resource); e != nil || !c.NotAfter.After(m.now()) {
@@ -369,9 +426,10 @@ func (m *Manager) step(ctx context.Context) {
 		// Never publish raw provider responses: they may contain credentials or validation tokens.
 		r.Job.Status = "failed"
 		r.Job.Failures++
-		stage := r.Job.Message
+		stage := failureStage
 		d := classifyError(err, stage)
-		r.Job.Message = stage + "：" + d.Error()
+		r.Job.FailureCode, r.Job.FailureStage = d.Code, d.Stage
+		r.Job.Message = d.Stage + "：" + d.Error()
 		appendEntry(r, m.now(), "error", d.Message, d)
 		if r.Pending {
 			r.Job.Message = "证书已签发，部署失败；旧证书保留，将重试部署"
@@ -381,7 +439,11 @@ func (m *Manager) step(ctx context.Context) {
 			delay = 24 * time.Hour
 		}
 		r.Job.NextAttempt = m.now().Add(delay)
+		if retryAt := m.now().Add(time.Duration(d.RetryAfterSeconds) * time.Second); retryAt.After(r.Job.NextAttempt) {
+			r.Job.NextAttempt = retryAt
+		}
 	} else {
+		r.Job.FailureCode, r.Job.FailureStage = "", ""
 		r.Job.Status = "ready"
 		r.Job.Message = "证书已保存，自动续期已启用"
 		r.Job.Failures = 0

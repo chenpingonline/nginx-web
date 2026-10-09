@@ -30,6 +30,9 @@ type Input struct {
 	RotateKey          bool              `json:"rotate_key"`
 	AcceptTerms        bool              `json:"accept_terms"`
 	PropagationSeconds int               `json:"propagation_seconds"`
+	DNSResolvers       []string          `json:"dns_resolvers,omitempty"`
+	DNSCheckMode       string            `json:"dns_check_mode,omitempty"`
+	DNSWaitSeconds     int               `json:"dns_wait_seconds,omitempty"`
 	Credentials        Credentials       `json:"credentials"`
 }
 type Credentials struct {
@@ -40,21 +43,26 @@ type Credentials struct {
 	EABHMAC  string `json:"eab_hmac,omitempty"`
 }
 type Job struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	CA            string     `json:"ca"`
-	Domains       []string   `json:"domains"`
-	Provider      string     `json:"provider"`
-	KeyType       string     `json:"key_type"`
-	Enabled       bool       `json:"enabled"`
-	Status        string     `json:"status"`
-	Message       string     `json:"message"`
-	CertificateID string     `json:"certificate_id,omitempty"`
-	NotAfter      *time.Time `json:"not_after,omitempty"`
-	NextAttempt   time.Time  `json:"next_attempt"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	Failures      int        `json:"failures"`
-	Revision      uint64     `json:"revision"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	CA                string     `json:"ca"`
+	Domains           []string   `json:"domains"`
+	Provider          string     `json:"provider"`
+	KeyType           string     `json:"key_type"`
+	Enabled           bool       `json:"enabled"`
+	Status            string     `json:"status"`
+	Message           string     `json:"message"`
+	CertificateID     string     `json:"certificate_id,omitempty"`
+	NotAfter          *time.Time `json:"not_after,omitempty"`
+	NextAttempt       time.Time  `json:"next_attempt"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Failures          int        `json:"failures"`
+	Revision          uint64     `json:"revision"`
+	FailureCode       string     `json:"failure_code,omitempty"`
+	FailureStage      string     `json:"failure_stage,omitempty"`
+	CleanupMessage    string     `json:"cleanup_message,omitempty"`
+	DeploymentPending bool       `json:"deployment_pending"`
+	RetryAfter        *time.Time `json:"retry_after,omitempty"`
 }
 
 // Record is private. It must never be sent by an API or included in configuration revisions.
@@ -146,6 +154,9 @@ func validate(in *Input) error {
 	}
 	if in.PropagationSeconds < 30 || in.PropagationSeconds > 1800 {
 		return errors.New("DNS 等待时间应为 30 至 1800 秒")
+	}
+	if err := validateDNSOptions(in); err != nil {
+		return err
 	}
 	if len(in.Domains) == 0 || len(in.Domains) > 100 {
 		return errors.New("请填写 1 至 100 个域名")

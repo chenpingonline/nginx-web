@@ -12,6 +12,7 @@ const open = ref(false);
 const active = ref(-1);
 const query = ref('');
 const placement = ref<Record<string, string>>({});
+const teleportTarget = ref<string | HTMLElement>('body');
 type Item = { value: T; label: string; disabled: boolean; action: boolean };
 function items(): Item[] {
   const result: Item[] = [];
@@ -44,6 +45,9 @@ async function show() {
   active.value = list.findIndex(item => item.value === props.modelValue && !item.disabled);
   if (active.value < 0) active.value = list.findIndex(item => !item.disabled);
   const r = trigger.value.getBoundingClientRect();
+  // A modal dialog makes nodes outside its top layer inert. Keep its menu
+  // inside the dialog so pointer selection works as well as keyboard input.
+  teleportTarget.value = trigger.value.closest('dialog') ?? 'body';
   const below = window.innerHeight - r.bottom - 12;
   const above = r.top - 12;
   const up = below < 180 && above > below;
@@ -113,7 +117,7 @@ onBeforeUnmount(() => { close(); clearTimeout(searchTimer); });
 <template>
   <button v-bind="$attrs" ref="trigger" type="button" class="app-select" role="combobox" aria-haspopup="listbox" :aria-expanded="open" :aria-controls="open ? id : undefined" :aria-activedescendant="open && active >= 0 ? `${id}-${active}` : undefined" :disabled="disabled" @click="open ? close() : show()" @keydown="key">
     {{ items().find(item => item.value === modelValue)?.label ?? '请选择' }}
-  <Teleport to="body">
+  <Teleport :to="teleportTarget">
     <div v-if="open" ref="menu" class="app-select-menu" :class="{ searchable }" :style="placement">
       <div v-if="searchable" class="app-select-search-wrap">
         <span class="app-select-search-icon" aria-hidden="true"></span>

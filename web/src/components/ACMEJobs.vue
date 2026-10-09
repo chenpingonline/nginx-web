@@ -3,6 +3,7 @@ import { computed, nextTick, ref, onMounted, onBeforeUnmount } from 'vue';
 import ACMEJobDetails from './ACMEJobDetails.vue';
 import ACMEJobEditor from './ACMEJobEditor.vue';
 import ACMEJobLogs from './ACMEJobLogs.vue';
+import ACMEJobDiagnostics from './ACMEJobDiagnostics.vue';
 import { request, errorMessage } from '../api';
 import type { ACMEJob, CertificateMeta } from '../types';
 const props = defineProps<{ certificates: CertificateMeta[] }>();
@@ -36,16 +37,17 @@ async function performAction(id: string, action: string) {
   try {
     await request(`/acme/${id}${action === 'delete' ? '' : '/' + action}`, { method: action === 'delete' ? 'DELETE' : 'POST' });
     const messages: Record<string, string> = {
-      retry: '续期任务已提交',
+      retry: '申请 / 续期任务已提交',
+      retry_deploy: '部署任务已提交，复用已签发证书',
       pause: '自动续期已暂停',
       resume: '自动续期已启用',
       delete: 'ACME 任务已移除',
     };
     jobs.value = jobs.value.map(job => {
       if (job.id !== id) return job;
-      if (action === 'retry') return { ...job, status: 'queued', message: '等待执行' };
-      if (action === 'pause') return { ...job, enabled: false, message: '自动续期已暂停' };
-      if (action === 'resume') return { ...job, enabled: true, status: 'queued', message: '自动续期已启用' };
+      if (action === 'retry' || action === 'retry_deploy') return { ...job, status: 'queued', message: '等待执行' };
+      if (action === 'pause') return { ...job, enabled: false, message: job.status === 'failed' ? job.message : '自动续期已暂停' };
+      if (action === 'resume') return { ...job, enabled: true, message: job.status === 'failed' ? job.message : '自动续期已启用' };
       return job;
     });
     setActionFeedback(id, { type: 'success', message: messages[action] || '任务已更新' });
@@ -60,11 +62,14 @@ async function performAction(id: string, action: string) {
 const selectedId = ref('');
 const editorId = ref('');
 const logsId = ref('');
+const diagnosticsId = ref('');
+const diagnosticsName = computed(() => jobs.value.find(j => j.id === diagnosticsId.value)?.name ?? '');
 const editMessage = ref('');
 const editError = ref('');
 const logsName = computed(() => jobs.value.find(j => j.id === logsId.value)?.name ?? '');
 function openEditor(id: string) { detail.value?.close(); editorId.value = id; }
 function openLogs(id: string) { detail.value?.close(); logsId.value = id; }
+function openDiagnostics(id: string) { detail.value?.close(); diagnosticsId.value = id; }
 async function showEdit(id: string) {
   try {
     jobs.value = await request<ACMEJob[]>('/acme');
@@ -121,7 +126,7 @@ onBeforeUnmount(() => {
   <article v-if="pendingJobs.length || error" class="card acme-jobs">
     <header class="acme-heading"><h3>ACME 自动申请与续期</h3><span class="field-help">{{ pendingJobs.length }} 个任务 · 自动刷新</span></header>
     <p v-if="error" class="notice warning" role="alert">{{ error }}</p>
-    <ACMEJobDetails v-for="job in pendingJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" @edit="openEditor" @logs="openLogs" />
+    <ACMEJobDetails v-for="job in pendingJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" @edit="openEditor" @logs="openLogs" @diagnose="openDiagnostics" />
   </article>
   <dialog ref="detail" class="modal acme-detail-dialog" aria-labelledby="acme-detail-title" @cancel.prevent="closeDetails">
     <header class="modal-header"><div><h2 id="acme-detail-title">证书详情</h2><p>{{ selected?.name }}</p></div><button type="button" class="icon-button" aria-label="关闭证书详情" autofocus @click="closeDetails">×</button></header>
@@ -137,7 +142,7 @@ onBeforeUnmount(() => {
       <p v-if="editError" class="notice danger" role="alert">{{ editError }}</p>
       <h3>ACME 自动申请与续期</h3>
       <p v-if="error" class="notice warning" role="alert">{{ error }}</p>
-      <ACMEJobDetails v-for="job in selectedJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" @edit="openEditor" @logs="openLogs" />
+      <ACMEJobDetails v-for="job in selectedJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" @edit="openEditor" @logs="openLogs" @diagnose="openDiagnostics" />
       <p v-if="!selectedJobs.length && !error" class="field-help">此证书未关联 ACME 自动续期任务。</p>
     </div>
     <footer class="modal-footer">
@@ -147,6 +152,7 @@ onBeforeUnmount(() => {
   </dialog>
   <ACMEJobEditor v-if="editorId" :key="editorId" :id="editorId" @close="editorId = ''" @saved="saved" />
   <ACMEJobLogs v-if="logsId" :key="logsId" :id="logsId" :name="logsName" @close="logsId = ''" />
+  <ACMEJobDiagnostics v-if="diagnosticsId" :key="diagnosticsId" :id="diagnosticsId" :name="diagnosticsName" @close="diagnosticsId = ''" />
 </template>
 <style scoped>
 .acme-jobs { padding: 16px; margin-bottom: 16px; }
