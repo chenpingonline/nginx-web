@@ -16,14 +16,6 @@ const error = ref('');
 const controller = new AbortController();
 let returnFocus: HTMLElement | null = null;
 const configured = computed(() => original.value?.configured_secrets.filter(path => path.startsWith('dns_config.') ? form.value?.provider === original.value?.provider : form.value?.ca === original.value?.ca && form.value?.directory_url === original.value?.directory_url) ?? []);
-const impact = computed(() => {
-  if (!form.value || !original.value) return '';
-  const changedDomains = [...new Set(form.value.domains.flatMap(d => d.split(/[\s,，]+/)).filter(Boolean).map(d => d.toLowerCase().replace(/\.$/, '')))].join(',') !== original.value.domains.join(',');
-  const accountChanged = form.value.ca !== original.value.ca || form.value.directory_url !== original.value.directory_url || form.value.email !== original.value.email || !!form.value.credentials.eab_kid || !!form.value.credentials.eab_hmac || clearSecrets.value.some(p => p.startsWith('credentials.eab_'));
-  if (accountChanged) return '本次更改将重新注册 ACME 账户并申请证书；旧证书在新证书部署成功前继续使用。';
-  if (changedDomains || form.value.key_type !== original.value.key_type) return '域名或密钥算法已改变，下次执行将重新申请证书；旧证书继续使用，历史日志保留。';
-  return '保留现有 ACME 账户、证书和历史日志，使用更新后的配置执行后续检查。';
-});
 function clear(path: string) { clearSecrets.value = clearSecrets.value.includes(path) ? clearSecrets.value.filter(p => p !== path) : [...clearSecrets.value, path]; }
 function close() { if (!saving.value) emit('close'); }
 async function load() {
@@ -61,7 +53,6 @@ onBeforeUnmount(() => { controller.abort(); dialog.value?.close(); returnFocus?.
       <form v-if="form" id="acme-edit-form" class="form-grid" @submit.prevent="save(false)">
         <div class="field full"><label for="acme-edit-name">名称</label><input id="acme-edit-name" v-model.trim="form.name" class="input" maxlength="80" :disabled="saving" /></div>
         <ACMEFields v-model="form" :busy="saving" :configured-secrets="configured" :clear-secrets="clearSecrets" @ready="ready = $event" @clear-secret="clear" />
-        <p class="notice full" role="status">{{ impact }}</p>
         <p class="field-help full">保存配置按原计划检查，不立即提交新的申请。“保存并重试”会启用自动续期并立即排队执行。更换 CA、邮箱或 EAB 后会重新注册 ACME 账户。</p>
       </form>
     </div>
