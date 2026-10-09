@@ -29,6 +29,5 @@ esac
   exit 1
 }
 
-chmod 755 "$BIN"
 if [[ -n "$DEST" ]]; then mkdir -p "$(dirname "$DEST")"; cp "$BIN" "$DEST"; chmod 755 "$DEST"; echo "$DEST";
-else echo "$BIN"; fi
+else [[ -x "$BIN" ]] || chmod 755 "$BIN"; echo "$BIN"; fi

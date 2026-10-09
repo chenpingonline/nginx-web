@@ -33,6 +33,8 @@ jobs:
           sudo .cache/package/uninstall.sh
           sudo test -f /etc/nginx-web/admin_password
           sudo test -f /var/lib/nginx-web/var/fnproxy.json
+      - name: Native Unix socket integration
+        run: INTEGRATION_SERVER_BIN="$PWD/.cache/package/app/bin/nginx-web-server" ./tests/integration.sh
       - name: Service diagnostics
         if: failure()
         run: sudo journalctl -u nginx-web --no-pager -n 80
@@ -40,3 +42,10 @@ jobs:
         with:
           name: linux-packages
           path: dist/*.tar.gz*
+  docker-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -f docker/Dockerfile -t nginx-web:ci .
+      - run: python3 docker/tests/integration.py --image nginx-web:ci

@@ -49,19 +49,27 @@ export FNPROXY_DEV_ALLOW=1
 
 cleanup() {
   "$TEST/app/bin/nginx-web-server" nginx-stop >/dev/null 2>&1 || true
-  [[ -f "$TEST/backend.pid" ]] && kill "$(cat "$TEST/backend.pid")" 2>/dev/null || true
-  [[ -f "$TEST/upstream.pid" ]] && kill "$(cat "$TEST/upstream.pid")" 2>/dev/null || true
+  for name in backend upstream; do
+    if [[ -f "$TEST/$name.pid" ]]; then
+      pid="$(cat "$TEST/$name.pid")"
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
   if [[ "$KEEP_TEST_ROOT" != "1" ]]; then rm -rf "$TEST"; else echo "保留测试目录：$TEST"; fi
 }
 trap cleanup EXIT
 
+# Seed an applied configuration so initialization can recover its listener;
+# custom settings without an applied baseline are deliberately kept as drafts.
 cat > "$TEST/var/fnproxy.json" <<JSON
 {
   "schema_version": 1,
   "settings": {"default_http_port": $DEFAULT_PORT, "default_https_port": $HTTPS_PORT, "revision_limit": 20},
   "rules": [],
   "certificates": [],
-  "dirty": true,
+  "dirty": false,
+  "last_applied_at": "2026-09-02T00:00:00Z",
   "updated_at": "2026-09-02T00:00:00Z"
 }
 JSON
@@ -72,6 +80,7 @@ for _ in $(seq 1 80); do [[ -S "$TEST/app/app.sock" ]] && break; sleep .1; done
 [[ -S "$TEST/app/app.sock" ]]
 
 curl -fsS --unix-socket "$TEST/app/app.sock" http://localhost/api/overview > "$TEST/overview.json"
+curl -fsS --unix-socket "$TEST/app/app.sock" http://localhost/api/revisions > "$TEST/initial-revisions.json"
 "$TEST/app/bin/nginx-web-server" nginx-start > "$TEST/start.json"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$DEFAULT_PORT/")" == "404" ]]
 
@@ -122,7 +131,7 @@ curl -fsS --unix-socket "$TEST/app/app.sock" http://localhost/api/revisions > "$
 python3 - "$TEST" <<'PY'
 import json, pathlib, sys
 root=pathlib.Path(sys.argv[1])
-assert len(json.loads((root/'revisions.json').read_text())) == 1
+assert len(json.loads((root/'revisions.json').read_text())) == len(json.loads((root/'initial-revisions.json').read_text())) + 1
 config=json.loads((root/'config.json').read_text())
 joined=config['master']+'\n'+'\n'.join(config['files'].values())
 assert 'proxy.test' in joined and 'secure.test' in joined and 'http2 on;' in joined
