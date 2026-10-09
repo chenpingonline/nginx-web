@@ -11,6 +11,7 @@ const password = ref("");
 const busy = ref(false);
 const error = ref("");
 const version = __APP_VERSION__;
+const edition = __CONTAINER__ ? "Docker 版" : "Linux 独立版";
 async function login() {
   if (busy.value) return;
   busy.value = true;
@@ -41,7 +42,7 @@ async function login() {
         <p v-if="error || notice" class="login-feedback" :class="{ 'login-error': error }" role="alert">{{ error || notice }}</p>
         <button type="submit" class="button primary login-submit" :disabled="busy">{{ busy ? '正在登录…' : '登录' }}</button>
       </form>
-      <p class="login-version">Docker 版 · v{{ version }}</p>
+      <p class="login-version">{{ edition }} · v{{ version }}</p>
     </section>
   </main>
 </template>

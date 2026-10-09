@@ -1,6 +1,6 @@
 # Docker 版
 
-Docker 版将 Vue 页面、Go 管理服务和 Nginx 1.30.4 放在同一个镜像中，通过独立管理员账户访问，不需要飞牛桌面或网关。构建支持 `linux/amd64` 和 `linux/arm64`；FPK 构建和网关认证继续使用原有方式。此版本不包含 WAF 实验功能。
+Docker 版将 Vue 页面、Go 管理服务和 Nginx 1.30.4 放在同一个镜像中，通过独立管理员账户访问，不需要飞牛桌面或网关。构建支持 `linux/amd64` 和 `linux/arm64`；FPK 构建位于独立的 nginx-web-fnos 仓库，继续使用飞牛网关认证。此版本不包含 WAF 实验功能。
 
 Docker 专用文件统一放在本目录：`Dockerfile`、`Dockerfile.dockerignore`、`compose.yaml`、`build-nginx.sh`、`tests/` 和本说明；离线镜像保存在 `docker/dist/`，不提交 Git。Go/Vue 源码继续由项目共享。
 
@@ -57,7 +57,7 @@ Compose 发布管理端口 `8080` 和代理端口 `80`、`443`、`9080`。没有
 
 更新代码后执行 `docker compose up -d --build`。`docker compose down` 保留卷；`docker compose down -v` 会删除数据。一个数据卷只应由一个运行中的实例使用。
 
-Compose 默认项目名固定为 `nginx-web-fnos`，与本项目原根目录启动方式一致，目录迁移后仍使用同一命名卷。如果此前通过 `-p` 或 `COMPOSE_PROJECT_NAME` 自定义项目名，迁移后继续使用原项目名；原密码文件和外部挂载也需移到 `docker/`，或改为指向原位置。
+Compose 默认项目名保留为 `nginx-web-fnos`，用于兼容仓库拆分前的 Docker 数据卷，目录迁移后仍使用同一命名卷。如果此前通过 `-p` 或 `COMPOSE_PROJECT_NAME` 自定义项目名，迁移后继续使用原项目名；原密码文件和外部挂载也需移到 `docker/`，或改为指向原位置。
 
 页面 JSON 备份可迁移代理、证书和设置，但不包含独立管理员账户、ACME 账户、DNS 凭据或续期任务。完整备份应停止容器后备份整个 `/data` 和外部挂载目录。FPK JSON 备份恢复为草稿，外部路径需改为容器路径后再应用。备份含私钥和代理认证摘要，应妥善保管。
 

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/platform"
-	"github.com/chenpingonline/nginx-web-fnos/internal/service"
-	webassets "github.com/chenpingonline/nginx-web-fnos/web"
+	"github.com/chenpingonline/nginx-web/internal/platform"
+	"github.com/chenpingonline/nginx-web/internal/service"
+	webassets "github.com/chenpingonline/nginx-web/web"
 )
 
 func TestACMEAPIProtectsCredentialsAndRequiresAdmin(t *testing.T) {

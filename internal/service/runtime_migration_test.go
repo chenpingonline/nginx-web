@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	nginxmanager "github.com/chenpingonline/nginx-web-fnos/internal/nginx"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	nginxmanager "github.com/chenpingonline/nginx-web/internal/nginx"
 )
 
 func migrationNginx(t *testing.T, s *AppService) {
@@ -129,7 +129,9 @@ func TestAutomaticRuntimeMigration(t *testing.T) {
 					raw, _ := os.ReadFile(filepath.Join(s.paths.NginxConfD, file.Name()))
 					config += string(raw)
 				}
-				if strings.Contains(config, "19992") || (domain.MinListenPort > 1 && strings.Contains(config, "low.test")) || !strings.Contains(config, "high.test") {
+				// Match the upstream endpoint; random temporary directory names
+				// also appear in config paths and can contain the port digits.
+				if strings.Contains(config, "127.0.0.1:19992") || (domain.MinListenPort > 1 && strings.Contains(config, "low.test")) || !strings.Contains(config, "high.test") {
 					t.Fatal("runtime configuration contains a draft or disabled rule")
 				}
 				if os.Getenv("NGINX_TEST_BIN") != "" {

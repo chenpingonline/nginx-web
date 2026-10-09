@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/platform"
-	appservice "github.com/chenpingonline/nginx-web-fnos/internal/service"
-	webassets "github.com/chenpingonline/nginx-web-fnos/web"
+	"github.com/chenpingonline/nginx-web/internal/platform"
+	appservice "github.com/chenpingonline/nginx-web/internal/service"
+	webassets "github.com/chenpingonline/nginx-web/web"
 )
 
 func TestAPIRequiresAdministratorHeaders(t *testing.T) {

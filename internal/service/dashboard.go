@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/metrics"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/metrics"
 )
 
 type DashboardRule struct {

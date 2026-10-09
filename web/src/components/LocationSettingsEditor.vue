@@ -5,7 +5,8 @@ import AppSelect from "./AppSelect.vue";
 import HelpHint from "./HelpHint.vue";
 import type { LocationSettings, UpstreamPool } from "../types";
 const standalone = __STANDALONE__;
-const exampleRoot = standalone ? "/mnt/www" : "/vol1/data/www";
+const container = __CONTAINER__;
+const exampleRoot = container ? "/mnt/www" : standalone ? "/srv/www" : "/vol1/data/www";
 
 const props = defineProps<{
   model: LocationSettings;
@@ -129,10 +130,10 @@ async function directoryAction(action: "select" | "authorize") {
       <div class="field full">
         <label>静态目录</label>
         <div class="static-directory-control">
-          <input v-model.trim="model.static_path" class="input" aria-label="静态目录" :placeholder="standalone ? '/mnt/www' : '/vol1/data/www'" required />
+          <input v-model.trim="model.static_path" class="input" aria-label="静态目录" :placeholder="exampleRoot" required />
           <button v-if="!standalone" type="button" class="button" :disabled="pickingDirectory || openingAuthorization" @click="selectDirectory">{{ pickingDirectory ? "选择中…" : "选择目录" }}</button>
         </div>
-        <span v-if="standalone" class="field-help">填写已挂载到容器内的目录，例如 /mnt/www。</span>
+        <span v-if="standalone" class="field-help">{{ container ? "填写已挂载到容器内的目录，例如 /mnt/www。" : "填写服务器上的目录，例如 /srv/www，并在服务配置中允许访问该目录。" }}</span>
         <span v-else class="field-help">选择 NAS 上的目录；请在应用设置的“访问权限”中授权。<button type="button" class="directory-authorization-link" :disabled="pickingDirectory || openingAuthorization" @click="openAuthorization">{{ openingAuthorization ? "打开中…" : "前往授权" }}</button></span>
         <span v-if="directoryError" class="field-error" role="alert">{{ directoryError }}</span>
       </div>

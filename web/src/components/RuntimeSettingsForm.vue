@@ -4,7 +4,7 @@ import AppSelect from "./AppSelect.vue";
 import { computed, reactive, ref, toRaw, watch } from "vue";
 import type { Settings } from "../types";
 const appVersion = __APP_VERSION__;
-const clientCAPlaceholder = __STANDALONE__ ? "/mnt/auth/client-ca.pem" : "/vol1/.../client-ca.pem";
+const clientCAPlaceholder = __CONTAINER__ ? "/mnt/auth/client-ca.pem" : __STANDALONE__ ? "/srv/auth/client-ca.pem" : "/vol1/.../client-ca.pem";
 const props = defineProps<{
   settings: Settings;
   busy: boolean;

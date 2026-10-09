@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/adminauth"
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/httpapi"
-	"github.com/chenpingonline/nginx-web-fnos/internal/platform"
-	"github.com/chenpingonline/nginx-web-fnos/internal/service"
+	"github.com/chenpingonline/nginx-web/internal/adminauth"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/httpapi"
+	"github.com/chenpingonline/nginx-web/internal/platform"
+	"github.com/chenpingonline/nginx-web/internal/service"
 )
 
 type App struct {

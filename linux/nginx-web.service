@@ -1,0 +1,38 @@
+[Unit]
+Description=nginx-web proxy manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nginx-web
+Group=nginx-web
+WorkingDirectory=/usr/local/lib/nginx-web
+ExecStart=/usr/local/lib/nginx-web/bin/nginx-web-server serve
+Environment=FNPROXY_MODE=standalone
+Environment=FNPROXY_APPDEST=/usr/local/lib/nginx-web
+Environment=FNPROXY_ETC=/var/lib/nginx-web/etc
+Environment=FNPROXY_VAR=/var/lib/nginx-web/var
+Environment=FNPROXY_TMP=/run/nginx-web/tmp
+Environment=FNPROXY_SOCKET=/run/nginx-web/app.sock
+EnvironmentFile=/etc/nginx-web/nginx-web.env
+RuntimeDirectory=nginx-web
+RuntimeDirectoryMode=0750
+StateDirectory=nginx-web
+StateDirectoryMode=0750
+UMask=0027
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nginx-web /run/nginx-web
+Restart=on-failure
+RestartSec=3s
+# Let the manager stop Nginx gracefully before systemd reaps the whole group.
+KillMode=mixed
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

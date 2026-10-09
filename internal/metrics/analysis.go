@@ -1,7 +1,7 @@
 package metrics
 
 import (
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 	"sort"
 	"strconv"
 	"strings"

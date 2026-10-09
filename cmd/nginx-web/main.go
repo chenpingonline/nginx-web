@@ -7,13 +7,13 @@ import (
 	"log"
 	"os"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/acme"
-	"github.com/chenpingonline/nginx-web-fnos/internal/app"
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/fileutil"
-	"github.com/chenpingonline/nginx-web-fnos/internal/platform"
-	"github.com/chenpingonline/nginx-web-fnos/internal/service"
-	webassets "github.com/chenpingonline/nginx-web-fnos/web"
+	"github.com/chenpingonline/nginx-web/internal/acme"
+	"github.com/chenpingonline/nginx-web/internal/app"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/fileutil"
+	"github.com/chenpingonline/nginx-web/internal/platform"
+	"github.com/chenpingonline/nginx-web/internal/service"
+	webassets "github.com/chenpingonline/nginx-web/web"
 )
 
 func main() {

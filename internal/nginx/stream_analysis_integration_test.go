@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/metrics"
-	"github.com/chenpingonline/nginx-web-fnos/internal/platform"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/metrics"
+	"github.com/chenpingonline/nginx-web/internal/platform"
 )
 
 func TestStreamAnalysisWithRealNginx(t *testing.T) {

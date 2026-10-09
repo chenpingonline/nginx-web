@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	acmemanager "github.com/chenpingonline/nginx-web-fnos/internal/acme"
-	"github.com/chenpingonline/nginx-web-fnos/internal/adminauth"
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/metrics"
-	appservice "github.com/chenpingonline/nginx-web-fnos/internal/service"
+	acmemanager "github.com/chenpingonline/nginx-web/internal/acme"
+	"github.com/chenpingonline/nginx-web/internal/adminauth"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/metrics"
+	appservice "github.com/chenpingonline/nginx-web/internal/service"
 )
 
 const gatewayPrefix = "/app/nginx-web"

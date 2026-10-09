@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 )
 
 type authorizationTestTransport struct {

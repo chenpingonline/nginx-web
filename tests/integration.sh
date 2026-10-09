@@ -12,7 +12,7 @@ case "$(uname -m)" in
   *) echo 'Unsupported integration test architecture' >&2; exit 1 ;;
 esac
 if [[ -z "${INTEGRATION_SERVER_BIN:-}" ]]; then
-  make --no-print-directory -C "$ROOT" frontend-build
+  make --no-print-directory -C "$ROOT" FRONTEND_MODE=fnos PERMISSION_MODE=standard frontend-build
 fi
 
 read -r DEFAULT_PORT HTTP_PORT HTTPS_PORT UPSTREAM_PORT < <(python3 - <<'PY'

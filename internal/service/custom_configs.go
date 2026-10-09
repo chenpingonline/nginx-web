@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 )
 
 func (s *AppService) SaveCustomConfig(original string, input domain.CustomConfig) (domain.CustomConfig, error) {

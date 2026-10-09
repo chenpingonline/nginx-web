@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	acmemanager "github.com/chenpingonline/nginx-web-fnos/internal/acme"
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	acmemanager "github.com/chenpingonline/nginx-web/internal/acme"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 	"github.com/go-acme/lego/v5/certificate"
 )
 

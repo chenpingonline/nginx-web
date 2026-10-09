@@ -2,7 +2,7 @@ package nginx
 
 import (
 	"fmt"
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 	"io"
 	"net"
 	"net/http"

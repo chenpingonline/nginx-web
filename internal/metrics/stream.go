@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/fileutil"
+	"github.com/chenpingonline/nginx-web/internal/fileutil"
 )
 
 type StreamCounts struct {

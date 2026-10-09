@@ -18,10 +18,8 @@
 !web/**
 web/node_modules/
 web/dist/
-!packaging/
-!packaging/fnos/
-!packaging/fnos/manifest
-!packaging/fnos/version.go
+!VERSION
+!version.go
 !third_party/
 !third_party/nginx/
 !third_party/nginx/mime.types

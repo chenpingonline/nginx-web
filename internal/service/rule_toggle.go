@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/fileutil"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/fileutil"
 )
 
 // ToggleRule applies only the enabled flag of an existing applied rule. Draft

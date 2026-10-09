@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 )
 
 type LimitCounts struct {

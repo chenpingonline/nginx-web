@@ -17,14 +17,14 @@ import (
 	"sync"
 	"time"
 
-	acmemanager "github.com/chenpingonline/nginx-web-fnos/internal/acme"
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/fileutil"
-	"github.com/chenpingonline/nginx-web-fnos/internal/metrics"
-	nginxmanager "github.com/chenpingonline/nginx-web-fnos/internal/nginx"
-	"github.com/chenpingonline/nginx-web-fnos/internal/pathsecurity"
-	"github.com/chenpingonline/nginx-web-fnos/internal/platform"
-	storepkg "github.com/chenpingonline/nginx-web-fnos/internal/store"
+	acmemanager "github.com/chenpingonline/nginx-web/internal/acme"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/fileutil"
+	"github.com/chenpingonline/nginx-web/internal/metrics"
+	nginxmanager "github.com/chenpingonline/nginx-web/internal/nginx"
+	"github.com/chenpingonline/nginx-web/internal/pathsecurity"
+	"github.com/chenpingonline/nginx-web/internal/platform"
+	storepkg "github.com/chenpingonline/nginx-web/internal/store"
 )
 
 type Paths = platform.Paths

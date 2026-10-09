@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/pathsecurity"
+	"github.com/chenpingonline/nginx-web/internal/pathsecurity"
 )
 
 func readAuthorizedCertificateFile(path string, limit int64) (string, error) {

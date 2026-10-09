@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 )
 
 func (s *AppService) SaveRuleGroup(id string, input domain.RuleGroup) (domain.RuleGroup, error) {

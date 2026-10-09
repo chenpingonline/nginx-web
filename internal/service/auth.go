@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 	"golang.org/x/crypto/bcrypt"
 )
 

@@ -24,7 +24,7 @@ esac
 
 [[ -f "$BIN" ]] || {
   echo "缺少 $ARCH_LABEL Nginx 二进制：$BIN" >&2
-  echo "请先在对应架构的 fnOS 上执行 scripts/build-nginx-on-fnos.sh，" >&2
+  echo "请先在对应架构的 Linux 主机上执行 scripts/build-nginx.sh，" >&2
   echo "再将生成的 $OUTPUT_NAME 复制到上述路径并命名为 nginx。" >&2
   exit 1
 }

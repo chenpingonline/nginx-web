@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 	"golang.org/x/sys/unix"
 )
 
@@ -160,7 +160,7 @@ func (v *pathValidator) validateAuthorizedPath(path string) (string, error) {
 
 func authorizationAdvice() string {
 	if os.Getenv("FNPROXY_MODE") == "standalone" {
-		return "请检查容器挂载、目录权限和允许访问的目录设置"
+		return "请检查目录是否可访问、目录权限和允许访问的目录设置"
 	}
 	return "请在飞牛应用设置中添加目录授权"
 }

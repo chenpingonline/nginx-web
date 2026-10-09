@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/domain"
 )
 
 func TestCustomConfigCRUD(t *testing.T) {

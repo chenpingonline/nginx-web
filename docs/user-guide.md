@@ -1,3 +1,5 @@
+> 本手册的示例最初来自飞牛版。Linux / Docker 的安装、独立管理员登录、目录与服务配置分别见 [Linux 文档](../linux/README.md) 和 [Docker 文档](../docker/README.md)；功能表单共享同一套源码。
+
 # nginx-web 使用说明
 
 [返回项目首页](../README.md) · [完整功能清单](features.md) · [DNS 服务商配置](dns-providers.md)

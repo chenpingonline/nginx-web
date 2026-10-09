@@ -42,7 +42,7 @@ if docker info >/dev/null 2>&1; then
 elif command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
   DOCKER=(sudo docker)
 else
-  die "Docker 不可用，请先在 fnOS 安装并启动 Docker"
+  die "Docker 不可用，请先安装并启动 Docker"
 fi
 
 mkdir -p "$OUTPUT_DIR"

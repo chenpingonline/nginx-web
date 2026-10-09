@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	nginxmanager "github.com/chenpingonline/nginx-web-fnos/internal/nginx"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	nginxmanager "github.com/chenpingonline/nginx-web/internal/nginx"
 )
 
 func TestToggleRequiresAppliedBaseline(t *testing.T) {

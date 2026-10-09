@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/packaging/fnos"
+	version "github.com/chenpingonline/nginx-web"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	AppVersion    = fnos.Version
+	AppVersion    = version.Version
 	BuildIdentity = AppName + " " + AppVersion
 )
 

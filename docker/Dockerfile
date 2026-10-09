@@ -3,9 +3,9 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./web/
 RUN npm --prefix web ci
-COPY packaging/fnos/manifest ./packaging/fnos/manifest
+COPY VERSION ./VERSION
 COPY web ./web
-RUN FNPROXY_FRONTEND_MODE=standalone FNPROXY_PERMISSION_MODE=full-ports npm --prefix web run build
+RUN FNPROXY_FRONTEND_MODE=docker FNPROXY_PERMISSION_MODE=full-ports npm --prefix web run build
 
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -15,14 +15,14 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY ["cmd/nginx-web/", "/src/cmd/nginx-web/"]
 COPY internal ./internal
-COPY packaging/fnos/manifest packaging/fnos/version.go ./packaging/fnos/
+COPY VERSION version.go ./
 COPY web/embed.go ./web/embed.go
 COPY --from=frontend /src/web/dist ./web/dist
 ARG TARGETOS
 ARG TARGETARCH
 ARG GO_BUILD_PARALLELISM=1
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOGC=50 GOMEMLIMIT=512MiB go build -p $GO_BUILD_PARALLELISM -tags full_ports -trimpath -buildvcs=false -ldflags='-s -w' -o /out/nginx-web-server ./cmd/nginx-web
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOGC=50 GOMEMLIMIT=512MiB go build -p $GO_BUILD_PARALLELISM -tags full_ports -trimpath -buildvcs=false -ldflags="-s -w -X github.com/chenpingonline/nginx-web.BuildVersion=nginx-web-version/$(cat VERSION)/" -o /out/nginx-web-server ./cmd/nginx-web
 
 # Build the official source for the target architecture. No local fnOS binary
 # or experimental WAF libraries can enter the Docker build context.
@@ -48,7 +48,7 @@ ENV FNPROXY_MODE=standalone FNPROXY_LISTEN=:8080 \
     FNPROXY_TMP=/tmp/nginx-web FNPROXY_SOCKET=/run/nginx-web/app.sock
 LABEL org.opencontainers.image.title="nginx-web" \
       org.opencontainers.image.description="Standalone Nginx proxy manager" \
-      org.opencontainers.image.source="https://github.com/chenpingonline/nginx-web-fnos" \
+      org.opencontainers.image.source="https://github.com/chenpingonline/nginx-web" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 USER 10001:10001
 WORKDIR /opt/nginx-web

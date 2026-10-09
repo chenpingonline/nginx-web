@@ -1,0 +1,42 @@
+name: Core tests and Linux packages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: make test
+      - run: make build-all
+      - name: Native systemd installation and proxy test
+        run: |
+          mkdir -p .cache/package
+          tar -xzf "dist/nginx-web-$(cat VERSION)-linux-amd64.tar.gz" -C .cache/package
+          sudo .cache/package/install.sh --no-start
+          sudo sed -i 's/^FNPROXY_LISTEN=.*/FNPROXY_LISTEN=127.0.0.1:8080/' /etc/nginx-web/nginx-web.env
+          sudo systemd-analyze verify /etc/systemd/system/nginx-web.service
+          sudo systemctl daemon-reload
+          sudo systemctl start nginx-web
+          sudo python3 linux/tests/service.py
+          sudo .cache/package/uninstall.sh
+          sudo test -f /etc/nginx-web/admin_password
+          sudo test -f /var/lib/nginx-web/var/fnproxy.json
+      - name: Service diagnostics
+        if: failure()
+        run: sudo journalctl -u nginx-web --no-pager -n 80
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-packages
+          path: dist/*.tar.gz*

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenpingonline/nginx-web-fnos/internal/domain"
-	"github.com/chenpingonline/nginx-web-fnos/internal/fileutil"
-	"github.com/chenpingonline/nginx-web-fnos/internal/pathsecurity"
+	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/fileutil"
+	"github.com/chenpingonline/nginx-web/internal/pathsecurity"
 )
 
 const MaxBackupBytes = 64 * 1024 * 1024
