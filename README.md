@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/src/assets/nginx-web.png" alt="nginx-web" width="128" />
+<img src="https://raw.githubusercontent.com/chenpingonline/nginx-web-fnos/master/packaging/fnos/ICON_256.PNG" alt="nginx-web" width="128" />
 
 # nginx-web
 
