@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue';
 import type { ACMEJob } from "../types";
 const props = defineProps<{ job: ACMEJob; pending?: boolean; feedback?: { type: 'success' | 'error'; message: string } }>();
-const emit = defineEmits<{ action: [id: string, action: string] }>();
+const emit = defineEmits<{ action: [id: string, action: string]; edit: [id: string]; logs: [id: string] }>();
 const names: Record<string, string> = { queued: '等待执行', running: '执行中', ready: '已签发', failed: '失败', letsencrypt: 'Let’s Encrypt', zerossl: 'ZeroSSL', custom: '自定义', cloudflare: 'Cloudflare', alidns: '阿里云', tencentcloud: '腾讯云 DNSPod' };
 const date = (value: string) => new Date(value).toLocaleString();
 const confirmDelete = ref(false);
@@ -14,11 +14,13 @@ function remove() {
 </script>
 <template>
     <div class="acme-job">
-      <div class="acme-heading"><strong>{{ job.name }}</strong><span class="badge" :class="!job.enabled || job.status === 'failed' ? 'danger' : job.status === 'ready' ? 'success' : 'info'">{{ job.enabled ? names[job.status] : '续期已暂停' }}</span></div>
+      <div class="acme-heading"><strong>{{ job.name }}</strong><span class="badge" :class="!job.enabled || job.status === 'failed' ? 'danger' : job.status === 'ready' ? 'success' : 'info'">{{ job.enabled ? names[job.status] : job.certificate_id ? '续期已暂停' : '申请已暂停' }}</span></div>
       <div class="field-help">{{ job.domains.join('、') }} · {{ names[job.ca] }} · {{ names[job.provider] || job.provider }}</div>
       <p class="acme-message" :class="job.enabled ? 'renewal-enabled' : 'renewal-paused'" role="status">{{ job.message }}</p>
-      <div class="field-help">{{ job.not_after ? `证书到期：${date(job.not_after)} · ` : '' }}{{ job.enabled ? `下次检查：${date(job.next_attempt)}` : '已签发的证书仍可使用' }}</div>
+      <div class="field-help">{{ job.not_after ? `证书到期：${date(job.not_after)} · ` : '' }}{{ job.enabled ? `下次检查：${date(job.next_attempt)}` : job.certificate_id ? '已签发的证书仍可使用' : '申请已暂停；可编辑配置后重试' }}</div>
       <div class="acme-actions">
+        <button type="button" class="button small" @click="emit('logs', job.id)">查看日志</button>
+        <button type="button" class="button small" :disabled="pending || job.status === 'running'" @click="emit('edit', job.id)">编辑配置</button>
         <button class="button small acme-renew-button" :disabled="pending || job.status === 'running' || !job.enabled" @click="emit('action', job.id, 'retry')">{{ job.certificate_id ? '立即续期 / 重试部署' : '重试' }}</button>
         <button class="button small acme-renewal-toggle" :class="job.enabled ? 'is-pause' : 'is-resume'" :disabled="pending || job.status === 'running'" @click="emit('action', job.id, job.enabled ? 'pause' : 'resume')">{{ job.enabled ? '暂停续期' : '启用续期' }}</button>
         <button class="button danger-ghost small" :disabled="pending || job.status === 'running'" @click="confirmDelete = true">移除任务</button>

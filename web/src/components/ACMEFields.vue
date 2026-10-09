@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import AppSelect from './AppSelect.vue';
+import ACMESecretState from './ACMESecretState.vue';
 import { dnsProviderLink } from '../dnsProviderLinks';
 import { request, errorMessage } from '../api';
 import type { ACMEInput, DNSCatalog, DNSProviderField } from '../types';
-const props = defineProps<{ modelValue: ACMEInput; busy: boolean }>();
-const emit = defineEmits<{ 'update:modelValue': [value: ACMEInput]; ready: [value: boolean] }>();
+const props = defineProps<{ modelValue: ACMEInput; busy: boolean; configuredSecrets?: string[]; clearSecrets?: string[] }>();
+const emit = defineEmits<{ 'update:modelValue': [value: ACMEInput]; ready: [value: boolean]; 'clear-secret': [path: string] }>();
 function set<K extends keyof ACMEInput>(key: K, value: ACMEInput[K]) { emit('update:modelValue', { ...props.modelValue, [key]: value }); }
 function credential(key: keyof ACMEInput['credentials'], value: string) { set('credentials', { ...props.modelValue.credentials, [key]: value }); }
+const advanced = ref(false);
+const configured = (path: string) => props.configuredSecrets?.includes(path) ?? false;
+const clearing = (path: string) => props.clearSecrets?.includes(path) ?? false;
+const secretPlaceholder = (path: string) => clearing(path) ? '保存后清除' : configured(path) ? '已配置，留空保留；填写新值替换' : '';
 const domains = computed({ get: () => props.modelValue.domains.join('\n'), set: (value: string) => set('domains', value.split('\n')) });
 
 const catalog = ref<DNSCatalog>();
@@ -52,24 +57,30 @@ const domesticLabels: Record<string, string> = {
 function fieldPresentation(field: DNSProviderField) {
  if (props.modelValue.provider === 'alidns') return alidnsFields[field.key];
  if (props.modelValue.provider === 'aliesa') return alidnsFields[field.key.replace(/^ALIESA_/, 'ALICLOUD_')];
+ if (props.modelValue.provider === 'cloudflare') {
+   const labels: Record<string, string> = { CF_DNS_API_TOKEN: 'DNS API Token', CF_ZONE_API_TOKEN: 'Zone API Token', CF_API_EMAIL: '账户邮箱', CF_API_KEY: 'Global API Key' };
+   if (labels[field.key]) return { label: labels[field.key], description: field.description, advanced: field.advanced };
+ }
  if (selected.value?.group !== '国内') return undefined;
  const label = domesticLabels[field.key];
  return label ? { label, description: '', advanced: field.advanced } : undefined;
 }
 function isAdvanced(field: DNSProviderField) {
  const presentation = fieldPresentation(field);
+ if (props.modelValue.provider === 'cloudflare') return field.key !== 'CF_DNS_API_TOKEN';
  if (presentation) return presentation.advanced;
  return field.advanced || field.description.startsWith('Alias') || (props.modelValue.provider === 'cloudflare' && field.key !== 'CF_DNS_API_TOKEN');
 }
-const primaryFields = computed(() => selected.value?.fields.filter(f => !isAdvanced(f)) ?? []);
+const primaryFields = computed(() => selected.value?.fields.filter(f => advanced.value || !isAdvanced(f)) ?? []);
+const hasAdvanced = computed(() => selected.value?.fields.some(isAdvanced) ?? false);
 const providerLink = computed(() => selected.value && dnsProviderLink(selected.value.code, selected.value.name));
 </script>
 <template>
   <div class="field full"><label for="acme-ca">证书颁发机构</label><AppSelect id="acme-ca" :model-value="modelValue.ca" class="select" :disabled="busy" @update:model-value="set('ca', $event)"><option value="letsencrypt">Let’s Encrypt</option><option value="zerossl">ZeroSSL</option><option value="custom">自定义 ACME 服务</option></AppSelect></div>
   <div v-if="modelValue.ca === 'custom'" class="field full"><label for="acme-url">ACME Directory URL</label><input id="acme-url" class="input" type="url" required placeholder="https://ca.example.com/directory" :value="modelValue.directory_url" :disabled="busy" @input="set('directory_url', ($event.target as HTMLInputElement).value)" /></div>
   <template v-if="modelValue.ca === 'zerossl' || modelValue.ca === 'custom'">
-    <div class="field full"><label for="acme-kid">EAB KID</label><input id="acme-kid" class="input" :required="modelValue.ca === 'zerossl'" :value="modelValue.credentials.eab_kid" :disabled="busy" autocomplete="off" @input="credential('eab_kid', ($event.target as HTMLInputElement).value)" /></div>
-    <div class="field full"><label for="acme-hmac">EAB HMAC Key</label><input id="acme-hmac" class="input" type="password" :required="modelValue.ca === 'zerossl'" :value="modelValue.credentials.eab_hmac" :disabled="busy" autocomplete="new-password" @input="credential('eab_hmac', ($event.target as HTMLInputElement).value)" /><span class="field-help">{{ modelValue.ca === 'zerossl' ? '在 ZeroSSL 控制台生成 EAB 凭据，不能用 DNS Token 代替。' : '仅在证书机构要求 EAB 时填写，两项需同时提供。' }}</span></div>
+    <div class="field full"><label for="acme-kid">EAB KID</label><input id="acme-kid" class="input" :placeholder="secretPlaceholder('credentials.eab_kid')" :required="modelValue.ca === 'zerossl' && (!configured('credentials.eab_kid') || clearing('credentials.eab_kid'))" :value="modelValue.credentials.eab_kid" :disabled="busy || clearing('credentials.eab_kid')" autocomplete="off" @input="credential('eab_kid', ($event.target as HTMLInputElement).value)" /><ACMESecretState path="credentials.eab_kid" :configured="configured('credentials.eab_kid')" :clearing="clearing('credentials.eab_kid')" :busy="busy" @clear="emit('clear-secret', $event)" /></div>
+    <div class="field full"><label for="acme-hmac">EAB HMAC Key</label><input id="acme-hmac" class="input" :placeholder="secretPlaceholder('credentials.eab_hmac')" type="password" :required="modelValue.ca === 'zerossl' && (!configured('credentials.eab_hmac') || clearing('credentials.eab_hmac'))" :value="modelValue.credentials.eab_hmac" :disabled="busy || clearing('credentials.eab_hmac')" autocomplete="new-password" @input="credential('eab_hmac', ($event.target as HTMLInputElement).value)" /><span class="field-help">{{ modelValue.ca === 'zerossl' ? '在 ZeroSSL 控制台生成 EAB 凭据，不能用 DNS Token 代替。' : '仅在证书机构要求 EAB 时填写，两项需同时提供。' }}</span><ACMESecretState path="credentials.eab_hmac" :configured="configured('credentials.eab_hmac')" :clearing="clearing('credentials.eab_hmac')" :busy="busy" @clear="emit('clear-secret', $event)" /></div>
   </template>
 
   <div class="field full"><label for="acme-provider">DNS 验证服务商</label><AppSelect id="acme-provider" :model-value="modelValue.provider" class="select" searchable search-placeholder="搜索 DNS 服务商" :disabled="busy || loading" @update:model-value="selectProvider"><option v-for="provider in catalog?.providers ?? []" :key="provider.code" :value="provider.code">{{ provider.name }}</option></AppSelect></div>
@@ -78,11 +89,13 @@ const providerLink = computed(() => selected.value && dnsProviderLink(selected.v
     <p v-if="providerLink" class="field-help"><a class="dns-credential-link" :href="providerLink.url" target="_blank" rel="noopener noreferrer">{{ providerLink.label }}</a></p>
     <div v-for="field in primaryFields" :key="field.key" class="field full dns-provider-field">
       <label :for="`dns-${field.key}`">{{ fieldPresentation(field)?.label ?? field.key }}</label>
-      <textarea v-if="field.multiline" :id="`dns-${field.key}`" class="textarea" rows="3" :value="modelValue.dns_config?.[field.key] ?? ''" :disabled="busy" autocomplete="off" spellcheck="false" @input="dnsValue(field.key, ($event.target as HTMLTextAreaElement).value)" />
-      <input v-else :id="`dns-${field.key}`" :type="field.secret ? 'password' : 'text'" class="input" :value="modelValue.dns_config?.[field.key] ?? ''" :disabled="busy" autocomplete="new-password" spellcheck="false" @input="dnsValue(field.key, ($event.target as HTMLInputElement).value)" />
+      <textarea v-if="field.multiline" :id="`dns-${field.key}`" class="textarea" rows="3" :placeholder="secretPlaceholder(`dns_config.${field.key}`)" :value="modelValue.dns_config?.[field.key] ?? ''" :disabled="busy || clearing(`dns_config.${field.key}`)" autocomplete="off" spellcheck="false" @input="dnsValue(field.key, ($event.target as HTMLTextAreaElement).value)" />
+      <input v-else :id="`dns-${field.key}`" :type="field.secret ? 'password' : 'text'" class="input" :placeholder="secretPlaceholder(`dns_config.${field.key}`)" :value="modelValue.dns_config?.[field.key] ?? ''" :disabled="busy || clearing(`dns_config.${field.key}`)" autocomplete="new-password" spellcheck="false" @input="dnsValue(field.key, ($event.target as HTMLInputElement).value)" />
+      <ACMESecretState v-if="field.secret" :path="`dns_config.${field.key}`" :configured="configured(`dns_config.${field.key}`)" :clearing="clearing(`dns_config.${field.key}`)" :busy="busy" @clear="emit('clear-secret', $event)" />
       <span v-if="fieldPresentation(field)?.description ?? field.description" class="field-help">{{ fieldPresentation(field)?.description ?? field.description }}</span>
     </div>
   </div>
+  <label v-if="hasAdvanced" class="checkbox-row full"><input v-model="advanced" type="checkbox" :disabled="busy" />显示 DNS 高级参数</label>
   <div class="field full"><label for="acme-domains">域名列表</label><textarea id="acme-domains" v-model="domains" class="textarea" rows="3" required spellcheck="false" :disabled="busy" placeholder="example.com&#10;*.example.com"></textarea><span class="field-help">每行一个域名，支持通配符；DNS 验证不支持 IP 地址证书。</span></div>
   <div class="field full"><label for="acme-email">电子邮箱</label><input id="acme-email" class="input" type="email" required :value="modelValue.email" :disabled="busy" @input="set('email', ($event.target as HTMLInputElement).value)" /></div>
   <div class="field full"><label for="acme-key-type">密钥算法</label><AppSelect id="acme-key-type" :model-value="modelValue.key_type" class="select" :disabled="busy" @update:model-value="set('key_type', $event)"><option value="rsa2048">RSA 2048</option><option value="rsa4096">RSA 4096</option><option value="ec256">ECDSA P-256</option><option value="ec384">ECDSA P-384</option></AppSelect></div>

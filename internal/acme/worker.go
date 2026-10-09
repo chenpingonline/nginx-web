@@ -16,11 +16,12 @@ import (
 )
 
 type workerMessage struct {
-	Stage      string  `json:"stage,omitempty"`
-	Record     *Record `json:"record,omitempty"`
-	Checkpoint bool    `json:"checkpoint,omitempty"`
-	Done       bool    `json:"done,omitempty"`
-	OK         bool    `json:"ok,omitempty"`
+	Stage      string      `json:"stage,omitempty"`
+	Record     *Record     `json:"record,omitempty"`
+	Checkpoint bool        `json:"checkpoint,omitempty"`
+	Done       bool        `json:"done,omitempty"`
+	OK         bool        `json:"ok,omitempty"`
+	Error      *Diagnostic `json:"error,omitempty"`
 }
 
 // Every native factory runs in a separate process because upstream reads process
@@ -96,15 +97,19 @@ func issueInWorker(ctx context.Context, r *Record, checkpoint func() error, prog
 	for {
 		var message workerMessage
 		if err = output.Decode(&message); err != nil {
-			return errors.New("DNS 申请子进程中断")
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return diagnostic("worker")
 		}
 		if message.Stage != "" {
 			progress(message.Stage)
 		}
 		if message.Record != nil {
-			job := r.Job
-			*r = *message.Record
-			r.Job = job
+			// Preserve the parent's live history and public job. Only issuer
+			// checkpoints (never configuration or logs) travel back from the child.
+			r.AccountKey, r.Registration = message.Record.AccountKey, message.Record.Registration
+			r.Resource, r.Pending, r.RenewAt = message.Record.Resource, message.Record.Pending, message.Record.RenewAt
 		}
 		if message.Checkpoint {
 			if err = checkpoint(); err != nil {
@@ -116,7 +121,10 @@ func issueInWorker(ctx context.Context, r *Record, checkpoint func() error, prog
 		}
 		if message.Done {
 			if !message.OK {
-				return errors.New("DNS 服务商认证或证书申请失败，请检查服务商配置")
+				if message.Error != nil {
+					return diagnostic(message.Error.Code)
+				}
+				return diagnostic("issuance")
 			}
 			return nil
 		}
@@ -157,13 +165,18 @@ func runWorker(options []dns01.ChallengeOption) int {
 		}
 		return nil
 	}
-	progress := func(stage string) { _ = output.Encode(workerMessage{Stage: stage}) }
+	stage := "准备申请"
+	progress := func(message string) { stage = safeStage(message); _ = output.Encode(workerMessage{Stage: stage}) }
 	factory := func(in Input) (challenge.Provider, error) {
 		progress("初始化 DNS 服务商")
 		return newNativeDNSProvider(in.Provider)
 	}
 	err := issueWithDNS(ctx, &r, checkpoint, progress, factory, options)
-	if output.Encode(workerMessage{Record: &r, Done: true, OK: err == nil}) != nil {
+	var detail *Diagnostic
+	if err != nil {
+		detail = classifyError(err, stage)
+	}
+	if output.Encode(workerMessage{Record: &r, Done: true, OK: err == nil, Error: detail}) != nil {
 		return 1
 	}
 	if err != nil {

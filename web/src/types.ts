@@ -540,7 +540,7 @@ export interface ACMEInput {
 export interface ACMEJob {
   id: string; name: string; ca: string; domains: string[]; provider: string; key_type: string;
   enabled: boolean; status: 'queued' | 'running' | 'ready' | 'failed'; message: string;
-  certificate_id?: string; not_after?: string; next_attempt: string; updated_at: string; failures: number;
+  certificate_id?: string; not_after?: string; next_attempt: string; updated_at: string; failures: number; revision: number;
 }
 
 export interface DNSProviderField { multiline: boolean; key: string; description: string; advanced: boolean; secret: boolean }
@@ -560,3 +560,7 @@ export interface StreamMetrics extends StreamCounts {
  points: (StreamCounts & { time: string })[];
  recent: StreamSample[];
 }
+
+export interface ACMESettings extends ACMEInput { revision: number; configured_secrets: string[] }
+export interface ACMELogEntry { time: string; level: string; message: string; code?: string; hint?: string }
+export interface ACMERun { id: string; kind: string; started_at: string; finished_at?: string; status: string; entries: ACMELogEntry[] }

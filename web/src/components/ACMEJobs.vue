@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, onMounted, onBeforeUnmount } from 'vue';
 import ACMEJobDetails from './ACMEJobDetails.vue';
-import { request, errorMessage, jsonBody } from '../api';
+import ACMEJobEditor from './ACMEJobEditor.vue';
+import ACMEJobLogs from './ACMEJobLogs.vue';
+import { request, errorMessage } from '../api';
 import type { ACMEJob, CertificateMeta } from '../types';
 const props = defineProps<{ certificates: CertificateMeta[] }>();
 const emit = defineEmits<{ changed: [] }>();
@@ -56,40 +58,27 @@ async function performAction(id: string, action: string) {
 }
 
 const selectedId = ref('');
-const editing = ref(false);
-const domainText = ref('');
-const saving = ref(false);
-const editError = ref('');
+const editorId = ref('');
+const logsId = ref('');
 const editMessage = ref('');
-const editJobId = ref('');
-const editJob = computed(() => jobs.value.find(j => j.id === editJobId.value));
+const editError = ref('');
+const logsName = computed(() => jobs.value.find(j => j.id === logsId.value)?.name ?? '');
+function openEditor(id: string) { detail.value?.close(); editorId.value = id; }
+function openLogs(id: string) { detail.value?.close(); logsId.value = id; }
 async function showEdit(id: string) {
-  await showDetails(id);
-  editing.value = true;
-  saving.value = true;
   try {
     jobs.value = await request<ACMEJob[]>('/acme');
     const job = jobs.value.find(j => j.certificate_id === id);
-    editJobId.value = job?.id || '';
-    domainText.value = (job?.domains ?? selected.value?.dns_names ?? []).join('\n');
-  } catch (e) { editError.value = errorMessage(e); }
-  finally { saving.value = false; }
-
+    if (job) openEditor(job.id);
+    else { await showDetails(id); editError.value = '此证书未关联 ACME 申请配置，请创建新的申请任务或重新导入证书。'; }
+  } catch(e) { error.value = errorMessage(e); }
 }
-async function reissue() {
-  if (saving.value || !editJob.value) return;
-  editError.value = ''; editMessage.value = '';
-  const domains = domainText.value.split(/[\s,，]+/).filter(Boolean);
-  if (!domains.length) { editError.value = '请至少填写一个域名'; return; }
-  saving.value = true;
-  try {
-    const job = await request<ACMEJob>(`/acme/${editJobId.value}/reissue`, { method: 'POST', body: jsonBody({ domains }) });
-    jobs.value = jobs.value.map(j => j.id === job.id ? job : j);
-    editing.value = false;
-    editMessage.value = '修改已保存，正在后台重新签发。成功后自动替换原证书，代理规则无需重新选择证书。';
-    emit('changed');
-  } catch (e) { editError.value = errorMessage(e); }
-  finally { saving.value = false; }
+function saved(job: ACMEJob, retry: boolean) {
+  jobs.value = jobs.value.map(j => j.id === job.id ? job : j);
+  editorId.value = '';
+  setActionFeedback(job.id, { type: 'success', message: retry ? '配置已保存，任务已提交' : '配置已保存，将按原计划检查' });
+  editMessage.value = retry ? '配置已保存，任务已提交；原证书继续使用。' : '配置已保存，将按原计划检查。';
+  emit('changed');
 }
 
 const detail = ref<HTMLDialogElement>();
@@ -98,13 +87,13 @@ const selected = computed(() => props.certificates.find(c => c.id === selectedId
 const pendingJobs = computed(() => jobs.value.filter(j => !props.certificates.some(c => c.id === j.certificate_id)));
 const selectedJobs = computed(() => jobs.value.filter(j => j.certificate_id === selectedId.value));
 async function showDetails(id: string) {
-  editing.value = false; editError.value = ''; editMessage.value = ''; editJobId.value = '';
+  editError.value = ''; editMessage.value = '';
   if (!detail.value?.open) returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   selectedId.value = id;
   await nextTick();
   detail.value?.showModal();
 }
-function closeDetails() { if (saving.value) return; detail.value?.close(); selectedId.value = ''; returnFocus?.focus(); }
+function closeDetails() { detail.value?.close(); selectedId.value = ''; returnFocus?.focus(); }
 defineExpose({ showDetails, showEdit });
 const date = (value: string) => new Date(value).toLocaleString();
 async function load() {
@@ -128,13 +117,14 @@ onBeforeUnmount(() => {
 });
 </script>
 <template>
+  <p v-if="editMessage" class="notice success" role="status">{{ editMessage }}</p>
   <article v-if="pendingJobs.length || error" class="card acme-jobs">
     <header class="acme-heading"><h3>ACME 自动申请与续期</h3><span class="field-help">{{ pendingJobs.length }} 个任务 · 自动刷新</span></header>
     <p v-if="error" class="notice warning" role="alert">{{ error }}</p>
-    <ACMEJobDetails v-for="job in pendingJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" />
+    <ACMEJobDetails v-for="job in pendingJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" @edit="openEditor" @logs="openLogs" />
   </article>
   <dialog ref="detail" class="modal acme-detail-dialog" aria-labelledby="acme-detail-title" @cancel.prevent="closeDetails">
-    <header class="modal-header"><div><h2 id="acme-detail-title">{{ editing ? '修改证书域名' : '证书详情' }}</h2><p>{{ selected?.name }}</p></div><button type="button" class="icon-button" aria-label="关闭证书详情" autofocus @click="closeDetails">×</button></header>
+    <header class="modal-header"><div><h2 id="acme-detail-title">证书详情</h2><p>{{ selected?.name }}</p></div><button type="button" class="icon-button" aria-label="关闭证书详情" autofocus @click="closeDetails">×</button></header>
     <div v-if="selected" class="modal-body">
       <dl class="certificate-details">
         <dt>域名 / IP</dt><dd>{{ [...(selected.dns_names ?? []), ...(selected.ip_addresses ?? [])].join('、') || '—' }}</dd>
@@ -145,24 +135,18 @@ onBeforeUnmount(() => {
       </dl>
       <p v-if="editMessage" class="notice success" role="status">{{ editMessage }}</p>
       <p v-if="editError" class="notice danger" role="alert">{{ editError }}</p>
-      <form v-if="editing && editJob" id="certificate-reissue" @submit.prevent="reissue">
-        <label for="certificate-domains">签发域名</label>
-        <textarea id="certificate-domains" v-model="domainText" class="textarea" rows="4" required :disabled="saving" placeholder="nascp.cn&#10;*.nascp.cn"></textarea>
-        <p class="field-help">每行一个域名，也可用逗号或空格分隔。*.nascp.cn 覆盖一级子域名，但不包含 nascp.cn；需要时请同时填写。</p>
-        <p class="field-help">沿用原来的证书机构和 DNS 验证配置。修改后立即重新签发并启用自动续期；签发失败时继续使用旧证书。</p>
-      </form>
-      <p v-if="editing && !editJob && !saving && !editError" class="notice warning">此证书未关联 ACME 申请配置，无法直接重新签发。请通过“导入证书”中的 ACME 申请填写域名和 DNS 验证配置。</p>
       <h3>ACME 自动申请与续期</h3>
       <p v-if="error" class="notice warning" role="alert">{{ error }}</p>
-      <ACMEJobDetails v-for="job in selectedJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" />
+      <ACMEJobDetails v-for="job in selectedJobs" :key="job.id" :job="job" :pending="actionPendingId === job.id" :feedback="actionFeedback[job.id]" @action="performAction" @edit="openEditor" @logs="openLogs" />
       <p v-if="!selectedJobs.length && !error" class="field-help">此证书未关联 ACME 自动续期任务。</p>
     </div>
     <footer class="modal-footer">
-      <button type="button" class="button ghost" :disabled="saving" @click="closeDetails">关闭</button>
-      <button v-if="!editing && selectedJobs.length" type="button" class="button primary" @click="showEdit(selectedId)">修改域名</button>
-      <button v-if="editing && editJob" form="certificate-reissue" type="submit" class="button primary" :disabled="saving || editJob.status === 'running' || editJob.status === 'queued'">{{ saving ? '提交中…' : editJob.status === 'running' || editJob.status === 'queued' ? '请等待当前任务完成' : '修改并重新签发' }}</button>
+      <button type="button" class="button ghost" @click="closeDetails">关闭</button>
+      <button v-if="selectedJobs.length" type="button" class="button primary" :disabled="selectedJobs.some(j => j.status === 'running')" @click="showEdit(selectedId)">编辑申请配置</button>
     </footer>
   </dialog>
+  <ACMEJobEditor v-if="editorId" :key="editorId" :id="editorId" @close="editorId = ''" @saved="saved" />
+  <ACMEJobLogs v-if="logsId" :key="logsId" :id="logsId" :name="logsName" @close="logsId = ''" />
 </template>
 <style scoped>
 .acme-jobs { padding: 16px; margin-bottom: 16px; }

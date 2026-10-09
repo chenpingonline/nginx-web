@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-acme/lego/v5/certcrypto"
@@ -35,6 +36,11 @@ func issue(ctx context.Context, r *Record, checkpoint func() error, progress fun
 	return issueWithDNS(ctx, r, checkpoint, progress, dnsProvider, nil)
 }
 func issueWithDNS(ctx context.Context, r *Record, checkpoint func() error, progress func(string), factory func(Input) (challenge.Provider, error), options []dns01.ChallengeOption) error {
+	// Some challenge implementations call providers concurrently. Serialize the
+	// progress sink and its durable checkpoint/worker protocol writes.
+	var progressMu sync.Mutex
+	sink := progress
+	progress = func(message string) { progressMu.Lock(); defer progressMu.Unlock(); sink(message) }
 	if len(r.AccountKey) == 0 {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -99,10 +105,13 @@ func issueWithDNS(ctx context.Context, r *Record, checkpoint func() error, progr
 			}
 		}
 	}
+	progress("初始化 DNS 服务商")
 	provider, err := factory(r.Input)
 	if err != nil {
 		return err
 	}
+	provider = &progressDNS{Provider: provider, progress: progress}
+	options = append([]dns01.ChallengeOption{propagationProgress(progress)}, options...)
 	if err = client.Challenge.SetDNS01Provider(provider, options...); err != nil {
 		return err
 	}
@@ -127,6 +136,7 @@ func issueWithDNS(ctx context.Context, r *Record, checkpoint func() error, progr
 	if err != nil {
 		return err
 	}
+	progress("证书签发成功")
 	r.Resource = resource
 	r.Pending = true
 	if c, e := leaf(resource); e == nil {

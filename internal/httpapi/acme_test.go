@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	acmemanager "github.com/chenpingonline/nginx-web/internal/acme"
 	"github.com/chenpingonline/nginx-web/internal/platform"
 	"github.com/chenpingonline/nginx-web/internal/service"
 	webassets "github.com/chenpingonline/nginx-web/web"
@@ -56,6 +57,38 @@ func TestACMEAPIProtectsCredentialsAndRequiresAdmin(t *testing.T) {
 	}
 	if e = json.Unmarshal(w.Body.Bytes(), &job); e != nil {
 		t.Fatal(e)
+	}
+	for _, endpoint := range []string{"config", "logs"} {
+		path := "/api/acme/" + job.ID + "/" + endpoint
+		if response := call(http.MethodGet, path, "", false); response.Code != 403 {
+			t.Fatal("unauthorized task read", endpoint, response.Code)
+		}
+		response := call(http.MethodGet, path, "", true)
+		if response.Code != 200 || strings.Contains(response.Body.String(), "never-return-this") || strings.Contains(response.Body.String(), "account_key") || strings.Contains(response.Body.String(), "registration") {
+			t.Fatal("task view leaked private data", endpoint)
+		}
+	}
+	settings, err := s.ACME().Settings(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Name = "edited-failed-task"
+	update := acmemanager.UpdateInput{Input: settings.Input, Revision: settings.Revision}
+	raw, _ := json.Marshal(update)
+	if response := call(http.MethodPut, "/api/acme/"+job.ID+"/config", string(raw), false); response.Code != 403 {
+		t.Fatal("unauthorized edit accepted")
+	}
+	if response := call(http.MethodPut, "/api/acme/"+job.ID+"/config", string(raw), true); response.Code != 200 || strings.Contains(response.Body.String(), "never-return-this") {
+		t.Fatal("edit failed or leaked", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodPut, "/api/acme/"+job.ID+"/config", string(raw), true); response.Code != 409 {
+		t.Fatal("stale edit accepted", response.Code)
+	}
+	if response := call(http.MethodGet, "/api/acme/missing/config", "", true); response.Code != 404 {
+		t.Fatal("missing config did not return 404")
+	}
+	if response := call(http.MethodGet, "/api/acme/missing/logs", "", true); response.Code != 404 {
+		t.Fatal("missing logs did not return 404")
 	}
 	for _, path := range []string{"/api/acme", "/api/state", "/api/revisions"} {
 		w = call(http.MethodGet, path, "", true)

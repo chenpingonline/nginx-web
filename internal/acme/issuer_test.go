@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-acme/lego/v5/certificate"
 	"github.com/go-acme/lego/v5/challenge"
 	"github.com/go-acme/lego/v5/challenge/dns01"
 )
@@ -24,6 +25,45 @@ func (p *recordingDNS) Present(context.Context, string, string, string) error {
 func (p *recordingDNS) CleanUp(context.Context, string, string, string) error {
 	p.cleanup++
 	return nil
+}
+
+func TestManagerHistoryWithPebble(t *testing.T) {
+	endpoint := os.Getenv("ACME_TEST_DIRECTORY")
+	if endpoint == "" {
+		t.Skip("set ACME_TEST_DIRECTORY for local Pebble protocol integration")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
+		t.Fatal("loopback only")
+	}
+	in := validInput()
+	in.CA, in.DirectoryURL = "custom", endpoint
+	m, err := New(t.TempDir(), func(id, _ string, _ *certificate.Resource) (string, error) { return id, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	dns := &recordingDNS{}
+	m.issue = func(ctx context.Context, r *Record, save func() error, progress func(string)) error {
+		return issueWithDNS(ctx, r, save, progress, func(Input) (challenge.Provider, error) { return dns, nil }, []dns01.ChallengeOption{dns01.PropagationWait(0, true)})
+	}
+	j, err := m.Create(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.step(context.Background())
+	runs, _ := m.Logs(j.ID)
+	if len(runs) != 1 || runs[0].Status != "ready" || m.List()[0].CertificateID != j.ID {
+		t.Fatal("real protocol run failed", runs)
+	}
+	stages := map[string]bool{}
+	for _, entry := range runs[0].Entries {
+		stages[entry.Message] = true
+	}
+	for _, stage := range []string{"注册 ACME 账户", "创建 DNS TXT 记录", "DNS TXT 记录已创建", "清理 DNS TXT 记录", "DNS TXT 记录已清理", "证书签发成功", "部署证书"} {
+		if !stages[stage] {
+			t.Fatal("missing real protocol stage", stage)
+		}
+	}
 }
 
 // Run against local Pebble with PEBBLE_VA_ALWAYS_VALID=1 and its test CA trusted

@@ -259,6 +259,38 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		}
 		job, err := a.service.ACME().Create(input)
 		writeResult(w, http.StatusAccepted, job, err)
+	case strings.HasPrefix(apiPath, "/api/acme/") && (r.Method == http.MethodGet || r.Method == http.MethodPut):
+		parts := strings.Split(strings.TrimPrefix(apiPath, "/api/acme/"), "/")
+		if len(parts) != 2 || (parts[1] != "config" && parts[1] != "logs") || (r.Method == http.MethodPut && parts[1] != "config") {
+			writeAPIError(w, http.StatusNotFound, "任务接口不存在")
+			return
+		}
+		var result any
+		var err error
+		status := http.StatusOK
+		if r.Method == http.MethodPut {
+			var input acmemanager.UpdateInput
+			if !decodeJSON(w, r, &input) {
+				return
+			}
+			result, err = a.service.ACME().Update(parts[0], input)
+			if input.Retry {
+				status = http.StatusAccepted
+			}
+		} else if parts[1] == "config" {
+			result, err = a.service.ACME().Settings(parts[0])
+		} else {
+			result, err = a.service.ACME().Logs(parts[0])
+		}
+		if errors.Is(err, acmemanager.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, acmemanager.ErrConflict) {
+			writeAPIError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeResult(w, status, result, err)
 	case strings.HasPrefix(apiPath, "/api/acme/") && (r.Method == http.MethodPost || r.Method == http.MethodDelete):
 		parts := strings.Split(strings.TrimPrefix(apiPath, "/api/acme/"), "/")
 		action := "delete"

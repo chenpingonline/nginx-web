@@ -61,12 +61,32 @@ func New(dir string, deploy DeployFunc) (*Manager, error) {
 		if err := validate(&r.Input); err != nil {
 			return nil, fmt.Errorf("ACME 任务 %s 配置无效", r.Job.ID)
 		}
-		if r.Job.Status == "running" {
+		recovered := r.Job.Status == "running"
+		if r.LastAttemptAt == nil && len(r.Runs) == 0 && (recovered || r.Job.Status == "failed") {
+			at := r.Job.UpdatedAt
+			r.LastAttemptAt = &at
+			migrated = true
+		}
+		if r.Job.Revision == 0 {
+			r.Job.Revision = 1
+			migrated = true
+		}
+		if recovered {
+			if len(r.Runs) > 0 {
+				run := &r.Runs[len(r.Runs)-1]
+				if run.Status == "running" {
+					at := m.now().UTC()
+					run.FinishedAt = &at
+					run.Status = "interrupted"
+					appendEntry(&r, at, "warning", "上次执行中断，等待恢复", diagnostic("interrupted"))
+				}
+			}
+
 			r.Job.Status = "queued"
 			r.Job.Message = "上次任务中断，等待恢复"
 			r.Job.NextAttempt = m.now()
 		}
-		if migrated {
+		if migrated || recovered {
 			if err := m.save(&r); err != nil {
 				return nil, err
 			}
@@ -108,7 +128,7 @@ func (m *Manager) Create(in Input) (Job, error) {
 	if len(m.records) >= 100 {
 		return Job{}, errors.New("最多支持 100 个 ACME 任务")
 	}
-	r := &Record{Input: in, Job: Job{ID: domain.RandomID(), Name: in.Name, CA: in.CA, Domains: in.Domains, Provider: in.Provider, KeyType: in.KeyType, Enabled: true, Status: "queued", Message: "等待申请", NextAttempt: m.now(), UpdatedAt: m.now()}}
+	r := &Record{Input: in, Job: Job{ID: domain.RandomID(), Name: in.Name, CA: in.CA, Domains: in.Domains, Provider: in.Provider, KeyType: in.KeyType, Revision: 1, Enabled: true, Status: "queued", Message: "等待申请", NextAttempt: m.now(), UpdatedAt: m.now()}}
 	if err := m.save(r); err != nil {
 		return Job{}, err
 	}
@@ -147,6 +167,7 @@ func (m *Manager) Reissue(id string, domains []string) (Job, error) {
 		return Job{}, err
 	}
 	r.Job.Domains = append([]string(nil), r.Input.Domains...)
+	r.Job.Revision++
 	r.Resource = nil
 	r.Pending = false
 	r.RenewAt = nil
@@ -189,7 +210,7 @@ func (m *Manager) Action(id, action string) error {
 		if !r.Job.Enabled {
 			return errors.New("请先启用自动续期")
 		}
-		if m.now().Before(r.Job.UpdatedAt.Add(time.Minute)) {
+		if retryCoolingDown(r, m.now()) {
 			return errors.New("请至少间隔一分钟再重试")
 		}
 		r.Job.NextAttempt = m.now()
@@ -272,6 +293,24 @@ func (m *Manager) step(ctx context.Context) {
 		return
 	}
 	m.active = r.Job.ID
+	attemptAt := m.now().UTC()
+	r.LastAttemptAt = &attemptAt
+	kind := "issue"
+	switch {
+	case r.Pending:
+		kind = "deploy"
+	case r.Resource != nil && !r.Force:
+		kind = "renewal_check"
+	case r.Resource != nil:
+		kind = "renew"
+	case r.Job.CertificateID != "":
+		kind = "reissue"
+	}
+	r.Runs = append(r.Runs, Run{ID: domain.RandomID(), Kind: kind, StartedAt: m.now().UTC(), Status: "running", Entries: []LogEntry{}})
+	if len(r.Runs) > maxRuns {
+		r.Runs = r.Runs[len(r.Runs)-maxRuns:]
+	}
+	appendEntry(r, m.now(), "info", "准备申请", nil)
 	r.Job.Status = "running"
 	r.Job.Message = "准备申请"
 	r.Job.UpdatedAt = m.now()
@@ -282,7 +321,18 @@ func (m *Manager) step(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	checkpoint := func() error { m.mu.Lock(); defer m.mu.Unlock(); return m.save(r) }
-	progress := func(message string) { r.Job.Message = message; r.Job.UpdatedAt = m.now(); _ = checkpoint() }
+	progress := func(message string) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		message = safeStage(message)
+		r.Job.Message, r.Job.UpdatedAt = message, m.now()
+		level := "info"
+		if message == "DNS TXT 清理失败，请检查服务商权限和残留记录" {
+			level = "warning"
+		}
+		appendEntry(r, m.now(), level, message, nil)
+		_ = m.save(r)
+	}
 	workCtx, cancel := context.WithTimeout(ctx, 35*time.Minute)
 	defer cancel()
 	var err error
@@ -320,7 +370,9 @@ func (m *Manager) step(ctx context.Context) {
 		r.Job.Status = "failed"
 		r.Job.Failures++
 		stage := r.Job.Message
-		r.Job.Message = stage + "失败；请检查 DNS 凭据、域名解析、CA/EAB 配置及 Nginx 状态"
+		d := classifyError(err, stage)
+		r.Job.Message = stage + "：" + d.Error()
+		appendEntry(r, m.now(), "error", d.Message, d)
 		if r.Pending {
 			r.Job.Message = "证书已签发，部署失败；旧证书保留，将重试部署"
 		}
@@ -348,7 +400,16 @@ func (m *Manager) step(ctx context.Context) {
 			r.Job.NextAttempt = m.now().Add(time.Hour)
 		}
 	}
+	run := &r.Runs[len(r.Runs)-1]
+	finished := m.now().UTC()
+	run.FinishedAt = &finished
+	run.Status = r.Job.Status
+	if err == nil {
+		appendEntry(r, finished, "success", r.Job.Message, nil)
+	}
 	if e := m.save(r); e != nil {
+		run.Status = "failed"
+		appendEntry(r, finished, "error", "无法保存 ACME 任务状态", diagnostic("storage"))
 		// Keep the successful in-memory result so a transient disk failure does not immediately reissue.
 		r.Job.Status = "failed"
 		r.Job.Message = "无法保存 ACME 任务状态，请检查磁盘空间与权限"

@@ -54,18 +54,21 @@ type Job struct {
 	NextAttempt   time.Time  `json:"next_attempt"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	Failures      int        `json:"failures"`
+	Revision      uint64     `json:"revision"`
 }
 
 // Record is private. It must never be sent by an API or included in configuration revisions.
 type Record struct {
-	Job          Job                       `json:"job"`
-	Input        Input                     `json:"input"`
-	AccountKey   []byte                    `json:"account_key"`
-	Registration *legoacme.ExtendedAccount `json:"registration,omitempty"`
-	Resource     *certificate.Resource     `json:"resource,omitempty"`
-	Pending      bool                      `json:"pending"`
-	RenewAt      *time.Time                `json:"renew_at,omitempty"`
-	Force        bool                      `json:"force"`
+	Job           Job                       `json:"job"`
+	Input         Input                     `json:"input"`
+	AccountKey    []byte                    `json:"account_key"`
+	Registration  *legoacme.ExtendedAccount `json:"registration,omitempty"`
+	Resource      *certificate.Resource     `json:"resource,omitempty"`
+	Pending       bool                      `json:"pending"`
+	RenewAt       *time.Time                `json:"renew_at,omitempty"`
+	Force         bool                      `json:"force"`
+	Runs          []Run                     `json:"runs,omitempty"`
+	LastAttemptAt *time.Time                `json:"last_attempt_at,omitempty"`
 }
 type account struct {
 	email        string
