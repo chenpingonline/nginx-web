@@ -6,6 +6,21 @@ Docker 专用文件统一放在本目录：`Dockerfile`、`Dockerfile.dockerigno
 
 除“构建与验证”节另有说明外，下文命令均在 `docker/` 目录执行。从项目根目录先执行 `cd docker`。
 
+## 从 Docker Hub 部署
+
+镜像地址为 [chenpingonline/nginx-web](https://hub.docker.com/r/chenpingonline/nginx-web)。`latest` 和版本标签（例如 `0.3.12`）均包含 Linux AMD64、ARM64，Docker 会自动选择宿主架构，无需指定 `platform` 或使用架构后缀。
+
+Docker Hub Overview 使用本目录的 [DOCKERHUB.md](DOCKERHUB.md) 维护，包含无需克隆源码即可复制使用的 Compose 配置和部署步骤。
+
+准备下节所述的密码文件后，直接拉取并启动：
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+```
+
+需要固定版本时，在 `docker/.env` 中设置 `NGINX_WEB_IMAGE=chenpingonline/nginx-web:0.3.12`。升级时修改固定版本（使用 `latest` 时无需修改），再执行上述命令；继续使用原密码文件和数据卷。
+
 ## 加载已打包镜像
 
 `dist/` 中的镜像归档可以复制到 NAS 后加载，无需在 NAS 上编译源码。x86_64 设备使用 AMD64 包，ARM64 设备使用 ARM64 包。以 AMD64 为例：
@@ -15,7 +30,7 @@ docker load -i dist/nginx-web-0.3.9-docker-amd64.tar.gz
 docker tag nginx-web:docker-amd64 nginx-web:docker
 ```
 
-ARM64 对应使用 `nginx-web-0.3.9-docker-arm64.tar.gz` 和 `nginx-web:docker-arm64`。同时复制项目的 `compose.yaml`，按下节准备密码文件，然后执行 `docker compose up -d --no-build`。离线包更新时重新加载镜像并执行 `docker compose up -d --no-build --force-recreate`。
+ARM64 对应使用 `nginx-web-0.3.9-docker-arm64.tar.gz` 和 `nginx-web:docker-arm64`。同时复制项目的 `compose.yaml`，按下节准备密码文件，并在 `.env` 中设置 `NGINX_WEB_IMAGE=nginx-web:docker`。离线包更新时重新加载镜像并执行 `docker compose up -d --no-build --force-recreate`。
 
 ## 使用 Compose
 
@@ -55,7 +70,7 @@ Compose 发布管理端口 `8080` 和代理端口 `80`、`443`、`9080`。没有
 
 启动恢复已应用配置，不自动发布保存的草稿。退出时结束管理请求和后台任务，再停止 Nginx。代理配置有问题时管理页面仍会启动，供检查和修复。健康检查验证管理 HTTP 与 Socket；页面主动停止 Nginx 不影响管理服务健康。
 
-更新代码后执行 `docker compose up -d --build`。`docker compose down` 保留卷；`docker compose down -v` 会删除数据。一个数据卷只应由一个运行中的实例使用。
+使用 Docker Hub 镜像时，执行 `docker compose pull && docker compose up -d --no-build` 升级；本地源码构建时，更新代码后执行 `docker compose up -d --build`。`docker compose down` 保留卷；`docker compose down -v` 会删除数据。一个数据卷只应由一个运行中的实例使用。
 
 Compose 默认项目名保留为 `nginx-web-fnos`，用于兼容仓库拆分前的 Docker 数据卷，目录迁移后仍使用同一命名卷。如果此前通过 `-p` 或 `COMPOSE_PROJECT_NAME` 自定义项目名，迁移后继续使用原项目名；原密码文件和外部挂载也需移到 `docker/`，或改为指向原位置。
 
@@ -102,6 +117,7 @@ volumes:
 
 | 变量 | 默认值 / 用途 |
 | --- | --- |
+| `NGINX_WEB_IMAGE` | Compose 镜像地址，默认 `chenpingonline/nginx-web:latest`；可覆盖为固定版本或本地镜像 |
 | `FNPROXY_MODE` | 镜像默认 `standalone`；FPK 默认 `fnos` |
 | `FNPROXY_LISTEN` | `:8080`，独立管理 HTTP 地址 |
 | `FNPROXY_ADMIN_USER` | 初次默认 `admin`，后续默认保存的账号 |
@@ -129,6 +145,14 @@ docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
   --output type=oci,dest=docker/dist/nginx-web-multiarch.tar .
 
 python3 docker/tests/integration.py --image nginx-web:docker
+```
+
+发布双架构镜像时，版本从根目录 `VERSION` 读取，版本标签和 `latest` 指向同一份多架构清单：
+
+```bash
+VERSION=$(cat VERSION)
+docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
+  -t "chenpingonline/nginx-web:$VERSION" -t chenpingonline/nginx-web:latest --push .
 ```
 
 构建上下文必须是项目根目录，不能使用 `docker/` 作为上下文：`COPY` 的源路径相对于上下文解析。Compose 已配置 `context: ..` 和 `dockerfile: docker/Dockerfile`；手动构建请使用上面的 `-f` 命令。忽略规则使用 Docker 支持的 [Dockerfile 专用忽略文件](https://docs.docker.com/build/concepts/context/#filename-and-location)，排除密码、运行数据和离线镜像。

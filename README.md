@@ -102,7 +102,7 @@ sudo systemctl status nginx-web
 
 ### Docker
 
-在本仓库的 `docker/` 目录准备管理员密码并启动：
+Docker Hub 镜像 [chenpingonline/nginx-web](https://hub.docker.com/r/chenpingonline/nginx-web) 的版本标签和 `latest` 均支持 AMD64、ARM64，Docker 自动选择架构。在本仓库的 `docker/` 目录准备管理员密码并启动：
 
 ```bash
 cd docker
@@ -110,10 +110,11 @@ mkdir -p secrets
 chmod 700 secrets
 openssl rand -base64 24 > secrets/admin_password.txt
 chmod 444 secrets/admin_password.txt
-docker compose up -d --build
+docker compose pull
+docker compose up -d --no-build
 ```
 
-打开 `http://宿主地址:8080`，账号为 `admin`，密码使用上述文件内容。此初始化示例适用于首次部署；已有部署应继续使用原密码文件和数据卷。离线镜像加载、端口映射、目录挂载和升级见 [Docker 部署说明](docker/README.md)。
+打开 `http://宿主地址:8080`，账号为 `admin`，密码使用上述文件内容。此初始化示例适用于首次部署；已有部署应继续使用原密码文件和数据卷。固定版本可在 `docker/.env` 设置 `NGINX_WEB_IMAGE=chenpingonline/nginx-web:0.3.12`。源码构建、离线镜像加载、端口映射、目录挂载和升级见 [Docker 部署说明](docker/README.md)。
 
 ### 飞牛 fnOS
 

@@ -2,7 +2,7 @@ name: nginx-web-fnos
 
 services:
   nginx-web:
-    image: nginx-web:docker
+    image: ${NGINX_WEB_IMAGE:-chenpingonline/nginx-web:latest}
     build:
       context: ..
       dockerfile: docker/Dockerfile
