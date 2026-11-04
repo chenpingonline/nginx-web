@@ -175,6 +175,15 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .rule-filters .input, .rule-filters .select { min-height: 34px; }
 .input, .select, .textarea { width: 100%; border: 1px solid var(--line-strong); background: var(--surface-solid); color: var(--text); border-radius: 9px; outline: 0; transition: .15s ease; }
 .input, .select { min-height: 34px; padding: 0 9px; }
+.compact-rule-toolbar { gap: 6px; margin-bottom: 8px; }
+.compact-rule-toolbar .button { height: 30px; min-height: 30px; padding: 0 10px; gap: 5px; border-radius: 7px; font-size: 13px; }
+.compact-rule-toolbar .button > svg { width: 15px; height: 15px; }
+.compact-rule-toolbar .rule-port-hint { font-size: 13px; }
+.compact-rule-toolbar > .notice { min-width: 0; max-width: 100%; min-height: 30px; padding: 4px 10px; border-radius: 7px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.rule-filters.compact-rule-toolbar :is(.input, .select) { height: 30px; min-height: 30px; border-radius: 7px; font-size: 13px; }
+.rule-filters.compact-rule-toolbar .search-input { flex-basis: 240px; min-width: 220px; }
+.rule-filters.compact-rule-toolbar .select { flex-basis: 112px; width: 112px; }
+.rule-filters.compact-rule-toolbar .filter-count { font-size: 12px; }
 .textarea { min-height: 82px; padding: 8px 9px; resize: vertical; line-height: 1.45; }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(35,163,122,.11); }
 .field { display: flex; flex-direction: column; gap: 4px; }
@@ -357,8 +366,8 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .certificate-modal .modal-header p { font-size: 13px; font-weight: 400; line-height: 1.6; color: var(--text-muted); }
 .certificate-modal .field-help a { font-size: 13px; font-weight: 400; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .certificate-modal .field-help a.dns-credential-link { font-size: 14px; font-weight: 600; }
-.modal-header { min-height: 56px; padding: 11px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
-.rule-modal .modal-header { flex-shrink: 0; min-height: 78px; padding: 14px 30px; border-bottom: 0; gap: 17px; }
+.modal-header { flex-shrink: 0; min-height: 44px; padding: 6px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+.rule-modal .modal-header { padding-inline: 20px; gap: 10px; }
 :is(.stream-modal, .policy-modal, .pool-modal) .modal-header { flex-shrink: 0; }
 :is(.rule-modal, .stream-modal, .policy-modal, .pool-modal) .modal-header > .rule-header-actions { display: flex; flex-shrink: 0; gap: 8px; margin-right: 0; }
 .rule-header-actions .button { white-space: nowrap; }
@@ -366,16 +375,16 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .modal-close { flex-shrink: 0; padding: 0; line-height: 1; }
 .modal-close svg { display: block; }
 .modal-header > div { margin-right: auto; }
-.modal-header h2 { margin: 0; font-size: 17px; }
-.rule-modal .modal-header h2 { font-size: 20px; font-weight: 680; letter-spacing: -.25px; }
-.modal-header p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
+.modal-header h2 { margin: 0; font-size: 16px; line-height: 24px; }
+.rule-modal .modal-header h2 { font-size: 16px; font-weight: 680; letter-spacing: -.25px; }
+.modal-header p { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
 .rule-modal .modal-header p { margin-top: 4px; font-size: 13px; }
 .modal-body { padding: 13px 14px; overflow-y: auto; }
 .rule-modal .modal-body { padding: 0 32px 14px; }
-.modal-footer { display: flex; justify-content: flex-end; align-items: center; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface-soft); }
+.modal-footer { flex-shrink: 0; flex-wrap: wrap; display: flex; justify-content: flex-end; align-items: center; gap: 7px; padding: 6px 16px; border-top: 1px solid var(--line); background: var(--surface-soft); }
 .modal-backdrop:has(.confirm-modal) { z-index: 110; }
 .confirm-modal { width: min(430px, 100%); }
-.confirm-modal .modal-header { border-bottom: 0; padding: 23px 22px 12px; }
+.confirm-modal .modal-header { border-bottom: 0; padding: 8px 16px 6px; }
 .confirm-modal .modal-footer { background: transparent; }
 
 .toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 200; display: grid; gap: 9px; width: min(360px, calc(100vw - 40px)); }
@@ -422,7 +431,7 @@ html[data-theme="light"] .app-update-github { color: #fff; }
   .modal-form-grid, .certificate-form-grid { grid-template-columns: 1fr; }
   .form-grid .full, .form-section { grid-column: auto; }
   .target-service-fields { grid-template-columns: 1fr; }
-  .rule-modal .modal-header { min-height: 76px; padding: 15px 18px; gap: 13px; flex-wrap: wrap; }
+  .rule-modal .modal-header { padding: 6px 16px; gap: 10px; flex-wrap: wrap; }
   :is(.stream-modal, .policy-modal, .pool-modal) .modal-header { flex-wrap: wrap; }
   :is(.rule-modal, .stream-modal, .policy-modal, .pool-modal) .modal-header > div:not(.rule-header-actions) { flex: 1; min-width: 0; }
   :is(.rule-modal, .stream-modal, .policy-modal, .pool-modal) .modal-header > .rule-header-actions { order: 1; width: 100%; justify-content: flex-end; }
@@ -442,6 +451,8 @@ html[data-theme="light"] .app-update-github { color: #fff; }
   .rule-filters .search-input { flex: 1 0 100%; width: 100%; }
   .rule-filters .select { flex: 1 1 calc(50% - 5px); width: auto; min-width: 0; }
   .rule-filters .filter-count { margin-left: auto; }
+  .rule-filters.compact-rule-toolbar .search-input { flex-basis: 100%; min-width: 0; }
+  .rule-filters.compact-rule-toolbar .select { flex-basis: calc(50% - 3px); width: auto; }
   .table .hide-mobile { display: none; }
   .proxy-list-head { display: none; }
   .proxy-row { grid-template-columns: minmax(150px, 1fr) auto; gap: 5px 12px; }
@@ -701,3 +712,74 @@ html[data-theme="dark"] { --scroll-thumb: #686b6e; }
 .certificate-validity-dates { color: var(--text-muted); font-size: 13px; }
 
 .unsupported-entry { color: var(--danger); }
+
+/* HTTP and Stream share the same tabbed rule editor shell. */
+.rule-editor-tabs { grid-column: 1 / -1; align-self: stretch; min-width: 0; display: flex; justify-content: center; gap: 24px; width: 100%; max-width: 100%; position: relative; flex-shrink: 0; padding: 0; margin: 0; border-bottom: 1px solid var(--line); background: var(--rule-editor-surface, var(--surface-solid)); overflow-x: auto; }
+.rule-editor-tabs > button { appearance: none; display: flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0; padding: 12px 8px 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 14px; font-weight: 500; line-height: 20px; white-space: nowrap; cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.rule-editor-tabs > button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.rule-editor-tabs > button:hover:not([aria-selected="true"]) { color: var(--text); background: var(--line); }
+.rule-editor-tabs > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+.rule-tab-count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; background: var(--accent-soft); color: var(--accent); border-radius: 5px; font-size: 11px; }
+.rule-tab-panel { grid-column: 1 / -1; min-width: 0; align-content: start; padding-bottom: 8px; }
+.rule-modal:has(.tabbed-rule-form) { --rule-editor-surface: var(--surface-solid); width: min(1020px, calc(100vw - 80px)); height: min(720px, calc(100dvh - 32px)); }
+.rule-modal:has(.tabbed-rule-form) > .modal-body { flex: 1; min-height: 0; }
+html[data-theme="dark"] .rule-modal:has(.tabbed-rule-form) { --rule-editor-surface: #1c1c1d; }
+.rule-modal .rule-editor-footer { gap: 8px; padding: 6px 20px; background: var(--rule-editor-surface, var(--surface-solid)); }
+.rule-editor-footer .button { min-width: 80px; }
+.rule-modal .tabbed-rule-form .rule-settings-panel,
+.rule-modal .tabbed-rule-form .stream-settings-panel { width: min(100%, 780px); justify-self: center; border: 0; border-radius: 0; background: transparent; padding: 6px 0; gap: 8px 24px; }
+.rule-modal .tabbed-rule-form .input,
+.rule-modal .tabbed-rule-form .textarea { width: 100%; }
+.rule-modal .tabbed-rule-form .input[type="number"] { width: min(100%, 150px); }
+.rule-modal form.tabbed-rule-form .rule-tab-panel > .form-section > span { font-size: 14px; font-weight: 600; }
+.rule-modal .tabbed-rule-form .field > label:first-child { font-weight: 500; }
+.rule-modal .tabbed-rule-form .rule-basics-row,
+.rule-modal .tabbed-rule-form .stream-basics { gap: 20px; padding: 2px 0 4px; }
+@media (max-width: 760px) {
+  .rule-modal:has(.tabbed-rule-form) { width: 100%; height: calc(100dvh - 16px); }
+  .rule-editor-tabs { justify-content: flex-start; gap: 12px; }
+  .rule-editor-tabs > button { padding-inline: 8px; }
+  .rule-modal .rule-editor-footer { padding: 6px 16px; }
+  .rule-modal .tabbed-rule-form .rule-settings-panel,
+  .rule-modal .tabbed-rule-form .stream-settings-panel { gap: 10px; }
+}
+#stream-rule-form .stream-basics .input { width: 100%; }
+
+/* Compact controls are limited to the HTTP and Stream rule editors. */
+.modal-header > svg { width: 24px; height: 24px; flex-shrink: 0; }
+.modal-header .icon-button { width: 30px; height: 30px; flex-shrink: 0; border-radius: 7px; }
+.modal :is(.modal-header, .modal-footer) .button { min-height: 30px; padding: 4px 10px; border-radius: 7px; font-size: 13px; line-height: 20px; }
+.rule-modal form.tabbed-rule-form :is(.input, .select) { height: 30px; min-height: 30px; padding-block: 4px; font-size: 14px; }
+.rule-modal form.tabbed-rule-form .textarea { height: 48px; min-height: 48px; padding: 5px 10px; line-height: 18px; font-size: 14px; resize: vertical; }
+.rule-modal form.tabbed-rule-form .field > label:first-child,
+.rule-modal form.tabbed-rule-form .checkbox-row { min-height: 30px; font-size: 14px; }
+.rule-modal form.tabbed-rule-form .form-section { min-height: 28px; margin-top: 0; padding-block: 2px; }
+.rule-modal form.tabbed-rule-form .backend-segments > button { min-height: 30px; padding-block: 4px; }
+.rule-modal form.tabbed-rule-form .backend-type-help { margin-top: 5px; }
+@media (max-width: 760px) {
+  .rule-modal form.tabbed-rule-form :is(.rule-basics-row, .stream-basics) { gap: 10px; }
+}
+
+/* The same centered title and content columns apply to every rule tab. */
+.rule-modal form.tabbed-rule-form .rule-tab-panel > .form-section { width: min(100%, 860px); justify-self: center; }
+.rule-modal form.tabbed-rule-form .rule-tab-panel > .field-help { width: min(100%, 780px); justify-self: center; }
+.rule-modal #stream-rule-form .stream-basics { width: min(100%, 860px); justify-self: center; grid-template-columns: minmax(0, 1fr) auto; padding-inline: 12px 0; }
+.rule-modal form.tabbed-rule-form .textarea { max-width: 520px; }
+#stream-rule-form .stream-protocol-field .select { width: min(100%, 150px); }
+@media (max-width: 760px) {
+  .rule-modal form.tabbed-rule-form .rule-tab-panel > .form-section { flex-wrap: wrap; gap: 6px 12px; }
+  .rule-modal form.tabbed-rule-form .rule-tab-panel > .form-section > small { flex-basis: calc(100% - 12px); }
+}
+
+/* Keep navigation outside the scrolling panel so it never covers form fields. */
+.rule-modal:has(.tabbed-rule-form) > .modal-body { overflow: hidden; padding-top: 0; padding-bottom: 0; }
+.rule-modal form.tabbed-rule-form { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 10px; }
+.rule-modal form.tabbed-rule-form > .rule-tab-panel { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 8px 16px; }
+.rule-modal :is(#proxy-rule-form, #stream-rule-form) .rule-settings-panel > .field:not(.standalone-field),
+.rule-modal #stream-rule-form .stream-settings-panel > .field { grid-template-columns: 104px minmax(0, 1fr); }
+.rule-modal #stream-rule-form .stream-proxy-field { grid-template-columns: 104px minmax(0, 1fr); }
+@media (max-width: 760px) {
+  .rule-modal :is(#proxy-rule-form, #stream-rule-form) .rule-settings-panel > .field:not(.standalone-field),
+  .rule-modal #stream-rule-form .stream-settings-panel > .field { grid-template-columns: minmax(0, 1fr); }
+  .rule-modal form.tabbed-rule-form > .rule-tab-panel { padding-inline: 0; }
+}

@@ -90,7 +90,7 @@ function savedResult(saved?: RateLimitPolicy, error?: string) {
 </script>
 
 <template>
-  <div class="toolbar">
+  <div class="toolbar compact-rule-toolbar">
     <div class="notice">
       策略统一维护限流参数；代理规则复用策略，但请求与连接额度分别计算。
     </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, useId } from "vue";
+import { computed, onBeforeUnmount, ref, useId } from "vue";
 import { TrimApp } from "@trimjs/web-app";
 import AppSelect from "./AppSelect.vue";
 import HelpHint from "./HelpHint.vue";
@@ -31,6 +31,42 @@ const setDavMethods = (event: Event) => {
   props.model.dav.methods = list((event.target as HTMLInputElement).value).map((item) => item.toUpperCase());
 };
 const changeBackend = () => { if (props.model.backend_type !== "static") props.model.dav.enabled = false; };
+const backendLabelId = useId();
+const commonBackends = [
+  { value: "proxy", label: "反向代理" },
+  { value: "static", label: "静态文件" },
+  { value: "return", label: "返回 / 跳转" },
+] as const;
+const advancedBackends = [
+  { value: "grpc", label: "gRPC" },
+  { value: "fastcgi", label: "FastCGI" },
+  { value: "uwsgi", label: "uWSGI" },
+  { value: "scgi", label: "SCGI" },
+  { value: "memcached", label: "Memcached" },
+  { value: "status", label: "连接状态" },
+] as const;
+function selectBackend(value: LocationSettings["backend_type"]) {
+  props.model.backend_type = value;
+  changeBackend();
+}
+const advancedBackend = computed({
+  get: () => advancedBackends.some(item => item.value === props.model.backend_type) ? props.model.backend_type : "",
+  set: (value: string) => {
+    const option = advancedBackends.find(item => item.value === value);
+    if (option) selectBackend(option.value);
+  },
+});
+const backendHelp = computed(() => ({
+  proxy: "将请求转发到后端服务，支持 HTTP、HTTPS 与 WebSocket。",
+  static: "从指定目录提供网页、图片和其他静态文件。",
+  return: "返回固定内容，或使用 3xx 状态码跳转到其他地址。",
+  grpc: "将 gRPC 请求转发到后端服务。",
+  fastcgi: "连接 FastCGI 服务，例如 PHP-FPM。",
+  uwsgi: "连接使用 uWSGI 协议的应用服务。",
+  scgi: "连接使用 SCGI 协议的应用服务。",
+  memcached: "从 Memcached 读取缓存内容。",
+  status: "显示 Nginx 的活动连接和请求统计，请限制访问范围。",
+})[props.model.backend_type]);
 const pickingDirectory = ref(false);
 const staticAliasId = `static-alias-${useId()}`;
 const openingAuthorization = ref(false);
@@ -93,19 +129,23 @@ async function directoryAction(action: "select" | "authorize") {
 
 <template>
   <div class="location-settings">
-    <div class="field">
-      <label>处理方式</label>
-      <AppSelect v-model="model.backend_type" class="select" @change="changeBackend">
-        <option value="proxy">HTTP 反向代理</option>
-        <option value="static">静态文件</option>
-        <option value="return">固定返回 / 跳转</option>
-        <option value="grpc">gRPC</option>
-        <option value="fastcgi">FastCGI</option>
-        <option value="uwsgi">uWSGI</option>
-        <option value="scgi">SCGI</option>
-        <option value="memcached">Memcached</option>
-        <option value="status">连接状态</option>
-      </AppSelect>
+    <div class="field full backend-type-field">
+      <label :id="backendLabelId">处理方式</label>
+      <div class="backend-choice-content">
+        <div class="backend-choices" role="group" :aria-labelledby="backendLabelId">
+          <div class="backend-segments">
+            <button v-for="option in commonBackends" :key="option.value" type="button"
+              :aria-pressed="model.backend_type === option.value" @click="selectBackend(option.value)">
+              {{ option.label }}
+            </button>
+          </div>
+          <AppSelect v-model="advancedBackend" class="select backend-more" :class="{ 'is-selected': advancedBackend }" aria-label="更多处理方式">
+            <option value="" disabled>更多协议</option>
+            <option v-for="option in advancedBackends" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </AppSelect>
+        </div>
+        <p class="backend-type-help">{{ backendHelp }}</p>
+      </div>
     </div>
     <slot v-if="root && ['proxy', 'grpc', 'fastcgi', 'uwsgi', 'scgi', 'memcached'].includes(model.backend_type)" name="upstream" />
     <template v-if="!root && ['proxy', 'grpc', 'fastcgi', 'uwsgi', 'scgi', 'memcached'].includes(model.backend_type)">
@@ -267,6 +307,24 @@ async function directoryAction(action: "select" | "authorize") {
 </template>
 
 <style scoped>
+.location-settings { column-gap: 28px; }
+.rule-modal .rule-form-grid .location-settings > .checkbox-row.field { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; }
+.backend-choice-content { min-width: 0; }
+.backend-choices { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+.backend-segments { display: inline-flex; max-width: 100%; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.backend-segments > button { appearance: none; min-height: 36px; padding: 7px 16px; border: 0; border-right: 1px solid var(--line-strong); background: transparent; color: var(--text-muted); font: inherit; font-size: 14px; white-space: nowrap; cursor: pointer; }
+.backend-segments > button:last-child { border-right: 0; }
+.backend-segments > button:hover { color: var(--accent); background: var(--accent-soft); }
+.backend-segments > button[aria-pressed="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+.backend-segments > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.rule-modal .rule-form-grid .backend-more { width: auto; min-width: 130px; height: 30px; min-height: 30px; }
+.backend-more.is-selected { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.backend-type-help { margin: 8px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .backend-segments { width: 100%; }
+  .backend-segments > button { flex: 1; padding-inline: 10px; }
+}
+
 .alias-label-with-help { display: inline-flex; align-items: center; gap: 8px; }
 .alias-help-content p { margin: 8px 0; }
 .alias-help-content p:last-child { margin-bottom: 0; }

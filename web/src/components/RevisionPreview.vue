@@ -90,7 +90,7 @@ const strategies: Record<string, string> = { round_robin: "轮询", least_conn: 
 .preview-dialog { position: fixed; inset: 0; margin: auto; padding: 0; width: min(820px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); color: var(--text); }
 .preview-dialog:not([open]) { display: none; }
 .preview-dialog::backdrop { background: rgba(18,25,31,.58); }
-.preview-dialog .modal-header { padding: 10px 16px; }
+.preview-dialog .modal-header { padding: 6px 16px; }
 .preview-heading h2 { margin: 0; font-size: 18px; }
 .preview-heading p { margin: 4px 0 0; font-size: 13px; }
 article.preview-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
@@ -118,6 +118,6 @@ summary { cursor: pointer; line-height: 1.8; }
 dd { margin: 6px 0 0; }
 .preview-raw { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .code-view { min-height: 0; max-height: 300px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 8px; }
-.modal-footer { padding: 8px 16px; font-size: 13px; justify-content: space-between; flex-shrink: 0; }
+.modal-footer { padding: 6px 16px; font-size: 13px; justify-content: space-between; flex-shrink: 0; }
 @media (max-width: 600px) { article.preview-rule { grid-template-columns: minmax(0, 1fr); } article .preview-features { grid-column: 1; grid-row: 3; margin-top: 6px; } .preview-body { padding: 14px; } .preview-stats div { flex-direction: column; gap: 2px; } .preview-route { grid-template-columns: 1fr; gap: 6px; } .route-arrow { display: none; } .preview-path { flex-direction: column; gap: 4px; } }
 </style>

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { minListenPort, listenPortHelp } from "../permissionMode";
+import RuleEditorTabs from "./RuleEditorTabs.vue";
+import { useRuleEditorTabs } from "../composables/useRuleEditorTabs";
 import ListenTypePicker from "./ListenTypePicker.vue";
 import AppSelect from "./AppSelect.vue";
 import { computed, nextTick, reactive, ref, watch } from "vue";
@@ -38,6 +40,13 @@ const emit = defineEmits<{
 const addRateLimitValue = "__add_rate_limit_policy__";
 const addAuthProfileValue = "__add_auth_profile__";
 const authProfileManager = ref<InstanceType<typeof AuthProfileManager>>();
+const { activeTab, revealInvalid } = useRuleEditorTabs();
+const editorTabs = computed(() => [
+  { id: "basic", label: "基本" },
+  { id: "paths", label: "自定义路径", count: form.locations.length },
+  { id: "security", label: "安全与限制" },
+  { id: "proxy", label: "代理与超时" },
+]);
 const domains = ref("");
 const authError = ref("");
 function defaultLocation(): LocationSettings {
@@ -142,12 +151,6 @@ function syncInherited() {
   if (inherits("certificate_id")) form.certificate_id = group.certificate_id;
   if (inherits("http2")) form.http2 = group.http2;
   if (!form.tls) form.certificate_id = "";
-}
-function changeGroup(id: string) {
-  if (id === form.group_id) return;
-  form.group_id = id;
-  form.inherit_fields = form.group_id && !props.rule ? inheritanceOptions.map(o => o.key) : [];
-  syncInherited();
 }
 watch(() => [form.inherit_fields, props.groups], syncInherited, { deep: true });
 watch(
@@ -266,6 +269,7 @@ function pasteBackendAddress(event: ClipboardEvent) {
 }
 function submit() {
   if (form.authentication.enabled && !form.authentication.profile_id) {
+    activeTab.value = "security";
     authError.value = "启用认证时必须选择认证策略。";
     return;
   }
@@ -309,17 +313,12 @@ async function addLocation() {
 }
 </script>
 <template>
-  <form id="proxy-rule-form" class="form-grid modal-form-grid rule-form-grid" @submit.prevent="submit">
+  <form id="proxy-rule-form" class="form-grid modal-form-grid rule-form-grid tabbed-rule-form" @submit.prevent="submit" @invalid.capture="revealInvalid">
+    <RuleEditorTabs v-model="activeTab" prefix="http" :tabs="editorTabs" />
+    <div v-show="activeTab === 'basic'" id="http-panel-basic" class="rule-tab-panel form-grid rule-form-grid" role="tabpanel" aria-labelledby="http-tab-basic" data-editor-tab="basic">
     <div class="rule-basics-row">
     <div class="field">
-      <label>所属分组</label>
-      <AppSelect id="rule-group" :model-value="form.group_id || ''" class="select" aria-label="所属分组" @update:model-value="changeGroup">
-        <option value="">未分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
-      </AppSelect>
-
-    </div>
-    <div class="field">
-      <label for="rule-name">规则名称</label
+      <label for="rule-name">名称</label
       ><input
         id="rule-name"
         v-model.trim="form.name"
@@ -336,7 +335,6 @@ async function addLocation() {
       <div v-if="selectedGroup" class="field-help group-inheritance full">
         <span>继承分组设置（取消勾选可自定义）：</span>
         <label v-for="option in inheritanceOptions" :key="option.key" class="checkbox-row"><input v-model="form.inherit_fields" type="checkbox" :value="option.key" />{{ option.label }}</label>
-        <span v-if="rule">移动分组时保留原配置，勾选后才使用分组默认值。</span>
       </div>
     <div class="form-section">
       <span>监听设置</span><small>定义访问域名、监听端口与协议</small>
@@ -344,13 +342,13 @@ async function addLocation() {
     <section class="rule-settings-panel" aria-label="监听设置">
     <div class="field full section-content"><label class="field-label-with-help">监听类型<HelpHint text="IPv6 入口可以转发到 IPv4 后端；需放行对应端口。" /></label><ListenTypePicker v-model="form.listen_type" :disabled="inherits('listen_type')" /></div>
     <div class="field full section-content entry-domain-field">
-      <label for="rule-domains">访问域名 / IP</label
+      <label for="rule-domains">域名 / IP</label
       ><textarea
         id="rule-domains"
         v-model="domains"
         class="textarea"
         required
-        placeholder="多个域名可用换行、空格或逗号分隔；使用 * 表示该端口的默认站点。&#10;例如：www.example.com、media.example.com"
+        placeholder="每行一个域名或 IP，* 表示默认站点。&#10;例如：www.example.com、192.168.1.10"
       ></textarea>
     </div>
     <div class="field section-content section-left">
@@ -374,7 +372,7 @@ async function addLocation() {
       >
     </div>
     <div v-if="!form.tls" class="field full section-content redirect-https-field">
-      <label class="field-label-with-help">HTTPS 跳转<HelpHint text="使用 308 保留请求路径；需另有相同域名的 HTTPS 规则监听目标端口。" /></label>
+      <label class="field-label-with-help">自动跳转<HelpHint text="使用 308 保留请求路径；需另有相同域名的 HTTPS 规则监听目标端口。" /></label>
       <div class="redirect-https-controls">
         <label class="checkbox-row"><input v-model="form.redirect_to_https" type="checkbox" />HTTP 自动跳转 HTTPS</label>
         <label v-if="form.redirect_to_https" class="redirect-port-control" for="redirect-https-port">
@@ -416,7 +414,7 @@ async function addLocation() {
           <template #upstream>
     <div class="target-service-fields full section-content">
       <div class="field target-pool-field">
-        <label class="field-label-with-help">转发服务组<HelpHint text="转发服务组支持权重、备份节点、故障恢复和负载均衡。" /></label
+        <label class="field-label-with-help">服务组<HelpHint text="转发服务组支持权重、备份节点、故障恢复和负载均衡。" /></label
         ><AppSelect
           id="upstream-pool"
           v-model="form.upstream_pool_id"
@@ -436,7 +434,7 @@ async function addLocation() {
         >
       </div>
       <div v-if="['proxy', 'grpc'].includes(form.root_location.backend_type)" class="field">
-        <label>转发服务协议</label
+        <label>后端协议</label
         ><AppSelect
           id="upstream-scheme"
           v-model="form.upstream_scheme"
@@ -476,6 +474,8 @@ async function addLocation() {
         </LocationSettingsEditor>
       </div>
     </section>
+    </div>
+    <div v-show="activeTab === 'paths'" id="http-panel-paths" class="rule-tab-panel form-grid rule-form-grid" role="tabpanel" aria-labelledby="http-tab-paths" data-editor-tab="paths">
     <div class="form-section section-actions">
       <span>自定义路径</span><small>例如 /api/ 转发 Java，其他请求使用默认路径</small
       ><button type="button" class="button compact add-location-button" @click="addLocation">
@@ -499,10 +499,12 @@ async function addLocation() {
       <LocationSettingsEditor :model="location.settings" :upstream-pools="upstreamPools" :rule-auth-enabled="form.authentication.enabled" />
     </div>
     </section>
+    </div>
+    <div v-show="activeTab === 'security'" id="http-panel-security" class="rule-tab-panel form-grid rule-form-grid" role="tabpanel" aria-labelledby="http-tab-security" data-editor-tab="security">
     <div class="form-section"><span>规则公共设置</span><small>默认路径与自定义路径共用</small></div>
     <section class="rule-settings-panel" aria-label="规则公共设置">
     <div class="field section-content section-right body-limit-field">
-      <label for="body-limit">请求体上限（MB）</label
+      <label for="body-limit">请求体（MB）</label
       ><div class="body-limit-control"><input
         id="body-limit"
         v-model.number="form.client_max_body_mb"
@@ -539,6 +541,8 @@ async function addLocation() {
         <span class="field-help">默认不转发，避免代理认证密码泄露给后端。仅在后端明确需要该请求头时开启。</span>
       </div>
     </section>
+    </div>
+    <div v-show="activeTab === 'proxy'" id="http-panel-proxy" class="rule-tab-panel form-grid rule-form-grid" role="tabpanel" aria-labelledby="http-tab-proxy" data-editor-tab="proxy">
     <div v-if="hasHTTPProxy" class="form-section"><span>反向代理设置</span><small>适用于本规则中使用 HTTP 反向代理的路径（含 HTTPS 后端）</small></div>
     <section v-if="hasHTTPProxy" class="rule-settings-panel" aria-label="反向代理设置">
     <div class="field section-content section-left">
@@ -565,7 +569,7 @@ async function addLocation() {
       v-if="hasHTTPSProxy"
       class="field section-content section-left"
     >
-      <label>转发服务证书校验</label
+      <label>证书校验</label
       ><label class="checkbox-row"
         ><input v-model="form.verify_upstream_tls" type="checkbox" /> 校验转发服务
         SSL/TLS 证书</label
@@ -574,7 +578,7 @@ async function addLocation() {
       <div class="settings-subheading full">后端超时</div>
 
     <div class="field section-content section-left">
-      <label class="field-label-with-help">后端连接超时（秒）<HelpHint text="与后端服务器建立连接的等待时间。" /></label
+      <label class="field-label-with-help">连接超时 (s)<HelpHint text="与后端服务器建立连接的等待时间。" /></label
       ><input
         v-model.number="form.connect_timeout_seconds"
         class="input"
@@ -584,7 +588,7 @@ async function addLocation() {
       />
     </div>
     <div class="field section-content section-right">
-      <label class="field-label-with-help">后端读取超时（秒）<HelpHint text="从后端读取响应时，相邻两次读取之间的最长等待时间，不是整个请求的总耗时。" /></label
+      <label class="field-label-with-help">读取超时 (s)<HelpHint text="从后端读取响应时，相邻两次读取之间的最长等待时间，不是整个请求的总耗时。" /></label
       ><input
         v-model.number="form.read_timeout_seconds"
         class="input"
@@ -594,7 +598,7 @@ async function addLocation() {
       />
     </div>
     <div class="field section-content section-left">
-      <label class="field-label-with-help">后端发送超时（秒）<HelpHint text="向后端发送请求时，相邻两次写入之间的最长等待时间，不是整个请求的总耗时。" /></label
+      <label class="field-label-with-help">发送超时 (s)<HelpHint text="向后端发送请求时，相邻两次写入之间的最长等待时间，不是整个请求的总耗时。" /></label
       ><input
         v-model.number="form.send_timeout_seconds"
         class="input"
@@ -627,13 +631,18 @@ async function addLocation() {
       </div>
     </div>
     </section>
+    <p v-if="!hasHTTPProxy" class="field-help full">当前规则没有 HTTP 反向代理路径，无需配置代理与超时。</p>
+    </div>
   </form>
 </template>
 
 <style scoped>
+#proxy-rule-form .entry-domain-field .textarea { max-width: 520px; }
+
+.target-service-fields { column-gap: 28px; }
 .rule-modal .rule-form-grid .rule-settings-panel[aria-label="反向代理设置"] > .field .input { width: 100%; }
 .settings-subheading { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; font-size: 13px; font-weight: 600; color: var(--text-muted); }
-.rule-modal .rule-form-grid .rule-settings-panel[aria-label="反向代理设置"] > .field:not(.standalone-field) { grid-template-columns: 168px minmax(0, 1fr); }
+.rule-modal .rule-form-grid .rule-settings-panel[aria-label="反向代理设置"] > .field:not(.standalone-field) { grid-template-columns: 104px minmax(0, 1fr); }
 .body-limit-control { position: relative; width: 100%; min-width: 0; }
 .rule-modal .rule-form-grid .body-limit-control .input { width: 100%; }
 .rule-modal .rule-form-grid .body-limit-control .input.has-unlimited-hint { padding-right: 105px; }
@@ -643,12 +652,12 @@ async function addLocation() {
 .path-summary span { color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
 .rule-enabled { align-self: center; white-space: nowrap; }
 .field-label-with-help { gap: 6px; width: fit-content; }
-.rule-basics-row { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 44px; align-items: start; }
+#proxy-rule-form .rule-basics-row { grid-column: 1 / -1; width: min(100%, 860px); justify-self: center; display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-inline: 12px 0; align-items: start; }
 #proxy-rule-form .rule-basics-row > .field { grid-template-columns: auto minmax(0, 1fr); column-gap: 14px; align-items: center; }
 .rule-form-grid .rule-basics-row > .field > label:first-child { font-size: 15px; font-weight: 620; white-space: nowrap; }
-.rule-form-grid .rule-basics-row :is(#rule-group, #rule-name) { height: 34px; min-height: 34px; }
+.rule-form-grid .rule-basics-row #rule-name { height: 30px; min-height: 30px; }
 .rule-form-grid .rule-basics-row #rule-name { width: 100%; }
-@media (max-width: 760px) { .rule-basics-row { grid-template-columns: minmax(0, 1fr); gap: 12px; } }
+@media (max-width: 760px) { #proxy-rule-form .rule-basics-row > .field { align-items: stretch; gap: 4px; } .rule-basics-row { grid-template-columns: minmax(0, 1fr); gap: 12px; } }
 
 .rule-settings-panel {
   grid-column: 1 / -1;
@@ -666,9 +675,8 @@ async function addLocation() {
   .rule-settings-panel { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 16px 12px; }
 }
 
-.group-inheritance { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+.group-inheritance { width: min(100%, 860px); justify-self: center; padding-left: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
 .group-inheritance .checkbox-row { font-size: 14px; font-weight: 400; }
-.group-inheritance > span:last-child { flex-basis: 100%; }
 #proxy-rule-form .body-limit-field { grid-template-columns: max-content minmax(0, 1fr); }
 .body-limit-field > label:first-child { white-space: nowrap; }
 .add-location-button {

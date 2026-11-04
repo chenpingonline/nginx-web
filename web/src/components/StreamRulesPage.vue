@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { minListenPort } from "../permissionMode";
+import RuleEditorTabs from "./RuleEditorTabs.vue";
+import { useRuleEditorTabs } from "../composables/useRuleEditorTabs";
 import AppSelect from "./AppSelect.vue";
+import RuleStatusSwitch from "./RuleStatusSwitch.vue";
 import { computed, reactive, ref, toRaw, watch } from "vue";
 import {
   PhArrowClockwise,
@@ -17,9 +20,11 @@ import type {
 } from "../types";
 const props = defineProps<{
   rules: StreamRule[];
+  pendingToggles?: Record<string, boolean | undefined>;
   pools: UpstreamPool[];
   certificates: CertificateMeta[];
   busy: boolean;
+  dirty: boolean;
 }>();
 const emit = defineEmits<{
   save: [value: StreamRuleInput, id: string];
@@ -27,12 +32,6 @@ const emit = defineEmits<{
   toggle: [rule: StreamRule, enabled: boolean];
   refresh: [];
 }>();
-function requestToggle(rule: StreamRule, event: Event) {
-  const input = event.target as HTMLInputElement;
-  const enabled = input.checked;
-  input.checked = rule.enabled;
-  emit("toggle", rule, enabled);
-}
 const search = ref("");
 const protocolFilter = ref<"all" | "tcp" | "udp">("all");
 const enabledFilter = ref<"all" | "enabled" | "disabled">("all");
@@ -53,6 +52,13 @@ function resetFilters() {
   protocolFilter.value = "all";
   enabledFilter.value = "all";
 }
+const { activeTab, revealInvalid } = useRuleEditorTabs();
+const editorTabs = [
+  { id: "basic", label: "基本" },
+  { id: "tls", label: "TLS 与 SNI" },
+  { id: "connection", label: "连接与超时" },
+  { id: "security", label: "安全与日志" },
+];
 const open = ref(false),
   editing = ref<StreamRule | null>(null),
   trustedText = ref(""),
@@ -90,6 +96,7 @@ const blank = (): StreamRuleInput => ({
 const form = reactive<StreamRuleInput>(blank());
 const routeNames = ref<string[]>([]);
 function show(rule: StreamRule | null = null) {
+  activeTab.value = "basic";
   editing.value = rule;
   Object.assign(form, blank(), rule ? structuredClone(toRaw(rule)) : {});
   form.trusted_proxies ??= [];
@@ -141,11 +148,9 @@ watch(
 );
 </script>
 <template>
-  <div class="toolbar">
-    <div class="notice">
-      四层代理，适用于 SSH、数据库、MQTT、游戏服务和 HTTPS SNI
-      透传。
-    </div>
+  <div class="toolbar compact-rule-toolbar">
+    <span class="badge" :class="dirty ? 'warning' : 'success'">{{ dirty ? "有未应用变更" : "配置已同步" }}</span>
+    <span class="rule-port-hint" title="四层代理，适用于 SSH、数据库、MQTT、游戏服务和 HTTPS SNI 透传。">监听端口 {{ minListenPort }}–65535</span>
     <span class="spacer"></span>
     <button class="button ghost" :disabled="busy" @click="emit('refresh')">
       <PhArrowClockwise :size="16" aria-hidden="true" />刷新
@@ -154,7 +159,7 @@ watch(
       <PhPlusCircle :size="17" aria-hidden="true" />添加 TCP/UDP 规则
     </button>
   </div>
-  <div class="toolbar rule-filters" role="search" aria-label="TCP/UDP 规则筛选">
+  <div class="toolbar rule-filters compact-rule-toolbar" role="search" aria-label="TCP/UDP 规则筛选">
     <input v-model="search" class="input search-input" type="search" aria-label="搜索 TCP/UDP 规则" placeholder="搜索名称、监听地址、端口或目标" />
     <AppSelect v-model="protocolFilter" class="select" aria-label="TCP/UDP 协议筛选">
       <option value="all">全部协议</option><option value="tcp">TCP</option><option value="udp">UDP</option>
@@ -173,7 +178,7 @@ watch(
             <th>状态</th>
             <th>名称</th>
             <th>入口</th>
-            <th>目标</th>
+            <th>转发服务</th>
             <th>TLS / 能力</th>
             <th></th>
           </tr>
@@ -181,16 +186,9 @@ watch(
         <tbody>
           <tr v-for="rule in filteredRules" :key="rule.id">
             <td>
-              <label class="switch"
-                ><input
-                  type="checkbox"
-                  :checked="rule.enabled"
-                  :disabled="busy"
-                  :aria-label="`${rule.enabled ? '停用' : '启用'}规则 ${rule.name}`"
-                  @change="
-                    requestToggle(rule, $event)
-                  " /><span></span
-              ></label>
+              <RuleStatusSwitch :enabled="rule.enabled" :pending-enabled="pendingToggles?.[rule.id]"
+                :disabled="busy" :label="`${rule.enabled ? '停用' : '启用'}规则 ${rule.name}`"
+                @change="emit('toggle', rule, $event)" />
             </td>
             <td>
               <div class="rule-name">{{ rule.name }}</div>
@@ -254,27 +252,22 @@ watch(
           <h2 id="stream-title">
             {{ editing ? "编辑" : "添加" }} TCP/UDP 规则
           </h2>
-          <p>保存后立即应用；其他尚未应用的配置修改也会一并生效。</p>
-        </div>
-        <div class="rule-header-actions">
-          <button type="button" class="button ghost" :disabled="busy" @click="open = false">取消</button>
-          <button type="submit" form="stream-rule-form" class="button primary" :disabled="busy">
-            {{ busy ? "保存并应用中…" : "保存并应用" }}
-          </button>
         </div>
         <button type="button" class="icon-button modal-close" aria-label="关闭" @click="open = false">
           <PhX :size="20" aria-hidden="true" />
         </button>
       </header>
       <div class="modal-body">
-        <form id="stream-rule-form" class="form-grid modal-form-grid stream-form" @submit.prevent="submit">
+        <form id="stream-rule-form" class="form-grid modal-form-grid stream-form tabbed-rule-form" @submit.prevent="submit" @invalid.capture="revealInvalid">
+          <RuleEditorTabs v-model="activeTab" prefix="stream" :tabs="editorTabs" />
+          <div v-show="activeTab === 'basic'" id="stream-panel-basic" class="rule-tab-panel form-grid stream-form" role="tabpanel" aria-labelledby="stream-tab-basic" data-editor-tab="basic">
           <div class="stream-basics">
-            <div class="field"><label for="stream-name">规则名称</label><input id="stream-name" v-model.trim="form.name" class="input" required maxlength="80" autofocus /></div>
-            <div class="field"><label for="stream-protocol">协议</label><AppSelect id="stream-protocol" v-model="form.protocol" class="select"><option value="tcp">TCP</option><option value="udp">UDP</option></AppSelect></div>
+            <div class="field"><label for="stream-name">名称</label><input id="stream-name" v-model.trim="form.name" class="input" required maxlength="80" autofocus /></div>
             <label class="checkbox-row stream-enabled"><input v-model="form.enabled" type="checkbox" />启用</label>
           </div>
           <div class="form-section"><span>监听设置</span><small>设置接收连接的地址与端口</small></div>
           <section class="stream-settings-panel" aria-label="监听设置">
+            <div class="field full stream-protocol-field"><label for="stream-protocol">协议</label><AppSelect id="stream-protocol" v-model="form.protocol" class="select"><option value="tcp">TCP</option><option value="udp">UDP</option></AppSelect></div>
           <div class="field">
             <label>监听地址</label
             ><input
@@ -295,26 +288,11 @@ watch(
               required
             />
           </div>
-          <div class="field full stream-proxy-field">
-            <label>PROXY Protocol</label>
-            <div class="stream-proxy-options">
-              <label class="checkbox-row"><input v-model="form.accept_proxy_protocol" type="checkbox" />入口接收</label>
-              <label class="checkbox-row"><input v-model="form.proxy_protocol" type="checkbox" />向转发服务发送</label>
-            </div>
-          </div>
-          <div class="field full">
-            <label>可信代理 IP / CIDR</label
-            ><textarea
-              v-model="trustedText"
-              class="textarea"
-              placeholder="仅在接收 PROXY Protocol 时填写"
-            ></textarea>
-          </div>
           </section>
           <div class="form-section"><span>转发服务</span><small>选择连接需要转发的位置</small></div>
           <section class="stream-settings-panel" aria-label="转发服务">
           <div class="field full stream-pool-field">
-            <label>Stream 转发服务组</label
+            <label>服务组</label
             ><AppSelect v-model="form.upstream_pool_id" class="select">
               <option value="">单个目标</option>
               <option
@@ -349,8 +327,26 @@ watch(
               /></div
           ></template>
           </section>
+          </div>
+          <div v-show="activeTab === 'connection'" id="stream-panel-connection" class="rule-tab-panel form-grid stream-form" role="tabpanel" aria-labelledby="stream-tab-connection" data-editor-tab="connection">
           <div class="form-section"><span>连接设置</span><small>调整连接和会话的最长等待时间</small></div>
           <section class="stream-settings-panel" aria-label="连接设置">
+          <div class="field full stream-proxy-field">
+            <label>PROXY 协议</label>
+            <div class="stream-proxy-options">
+              <label class="checkbox-row"><input v-model="form.accept_proxy_protocol" type="checkbox" />入口接收</label>
+              <label class="checkbox-row"><input v-model="form.proxy_protocol" type="checkbox" />向转发服务发送</label>
+            </div>
+          </div>
+          <div class="field full">
+            <label>可信代理</label
+            ><textarea
+              v-model="trustedText"
+              class="textarea"
+              placeholder="仅在接收 PROXY Protocol 时填写"
+            ></textarea>
+          </div>
+
           <div class="field">
             <label>连接超时（秒）</label
             ><input
@@ -372,7 +368,7 @@ watch(
             />
           </div>
           <div v-if="form.protocol === 'udp'" class="field">
-            <label>UDP 响应次数</label
+            <label>UDP 响应数</label
             ><input
               v-model.number="form.udp_responses"
               class="input"
@@ -382,6 +378,8 @@ watch(
             />
           </div>
           </section>
+          </div>
+          <div v-show="activeTab === 'tls'" id="stream-panel-tls" class="rule-tab-panel form-grid stream-form" role="tabpanel" aria-labelledby="stream-tab-tls" data-editor-tab="tls">
           <div class="form-section"><span>TLS 设置</span><small>配置加密连接与 SNI 透传</small></div>
           <section class="stream-settings-panel" aria-label="TLS 设置">
           <div class="field">
@@ -464,10 +462,12 @@ watch(
             </div></template
           >
           </section>
+          </div>
+          <div v-show="activeTab === 'security'" id="stream-panel-security" class="rule-tab-panel form-grid stream-form" role="tabpanel" aria-labelledby="stream-tab-security" data-editor-tab="security">
           <div class="form-section"><span>安全与日志</span><small>控制访问范围与连接记录</small></div>
           <section class="stream-settings-panel" aria-label="安全与日志">
           <div class="field">
-            <label>日志与连接限制</label
+            <label>日志与限额</label
             ><label class="checkbox-row"
               ><input v-model="form.access_log" type="checkbox" />记录 Stream
               访问日志</label
@@ -481,16 +481,23 @@ watch(
             />
           </div>
           <div class="field">
-            <label>允许 IP / CIDR</label
+            <label>允许来源</label
             ><textarea v-model="allowText" class="textarea"></textarea>
           </div>
           <div class="field">
-            <label>拒绝 IP / CIDR</label
+            <label>拒绝来源</label
             ><textarea v-model="denyText" class="textarea"></textarea>
           </div>
           </section>
+          </div>
         </form>
       </div>
+        <footer class="modal-footer rule-editor-footer">
+          <button type="button" class="button ghost" :disabled="busy" @click="open = false">取消</button>
+          <button type="submit" form="stream-rule-form" class="button primary" :disabled="busy">
+            {{ busy ? "保存并应用中…" : "保存并应用" }}
+          </button>
+        </footer>
       </section>
     </div>
   </Teleport>
@@ -513,7 +520,7 @@ watch(
 .stream-proxy-field > label:first-child { white-space: nowrap; }
 .stream-proxy-options { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 24px; }
 .stream-proxy-options .checkbox-row { white-space: nowrap; }
-#stream-rule-form .stream-pool-field { grid-template-columns: max-content minmax(0, 250px); column-gap: 16px; }
+#stream-rule-form .stream-pool-field { grid-template-columns: 112px minmax(0, 250px); column-gap: 10px; }
 .stream-pool-field > label:first-child { white-space: nowrap; }
 .stream-form .field > label:first-child { min-height: 34px; font-size: 15px; font-weight: 620; }
 .stream-form .input, .stream-form .select { height: 34px; min-height: 34px; padding-inline: 11px; border-radius: 8px; font-size: 15px; }
@@ -526,11 +533,13 @@ watch(
 .stream-connection-limit-label { align-self: center; }
 .stream-subheading { font-size: 15px; font-weight: 620; padding-top: 8px; border-top: 1px solid var(--line); }
 @media (max-width: 760px) {
+  #stream-rule-form .stream-basics > .field { align-items: stretch; gap: 4px; }
   .stream-basics, .stream-settings-panel { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .stream-settings-panel { padding: 16px 12px; }
   .stream-form > .form-section { flex-wrap: wrap; gap: 8px; }
   #stream-rule-form .field, #stream-rule-form .stream-pool-field, #stream-rule-form .stream-proxy-field { grid-template-columns: minmax(0, 1fr); }
   .stream-pool-field .select { width: min(100%, 250px); }
   .stream-form .field > .checkbox-row { grid-column: 1; }
+  .stream-connection-limit-label { align-self: flex-start; }
 }
 </style>

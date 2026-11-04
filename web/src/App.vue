@@ -38,6 +38,7 @@ const emit = defineEmits<{ logout: [] }>();
 import RuleGroups from "./components/RuleGroups.vue";
 import type { RuleGroup } from "./types";
 import RuleForm from "./components/RuleForm.vue";
+import RuleStatusSwitch from "./components/RuleStatusSwitch.vue";
 import DashboardPage from "./components/DashboardPage.vue";
 import ErrorDetailsPage from "./components/AnalysisPage.vue";
 import CertificateForm from "./components/CertificateForm.vue";
@@ -675,20 +676,31 @@ async function deleteRule(rule: ProxyRule) {
   );
   if (deleted) await loadCore(true);
 }
-function requestRuleToggle(rule: ProxyRule, event: Event) {
-  const input = event.target as HTMLInputElement;
-  const enabled = input.checked;
-  input.checked = rule.enabled;
-  void toggleRule(rule, enabled);
-}
-async function toggleRule(rule: ProxyRule, enabled: boolean) {
-  const ok = await mutate(() =>
-    request(`/rules/${rule.id}/enabled`, { method: "POST", body: jsonBody({ enabled }) }),
-  );
-  if (ok !== undefined) {
-    toast(enabled ? "规则已启用并立即生效" : "规则已停用并立即生效", "success");
-    await loadCore(true);
+const httpToggleTargets = reactive<Record<string, boolean | undefined>>({});
+const streamToggleTargets = reactive<Record<string, boolean | undefined>>({});
+async function toggleRuleEnabled(rule: ProxyRule | StreamRule, enabled: boolean, stream = false) {
+  if (busy.value) return;
+  const targets = stream ? streamToggleTargets : httpToggleTargets;
+  targets[rule.id] = enabled;
+  try {
+    await mutate(async () => {
+      await request(`/${stream ? "streams" : "rules"}/${rule.id}/enabled`, {
+        method: "POST", body: jsonBody({ enabled }),
+      });
+      // Commit the confirmed flag before the broader overview/state refresh.
+      const rules = stream ? state.value?.stream_rules : state.value?.rules;
+      const current = rules?.find(item => item.id === rule.id);
+      if (current) current.enabled = enabled;
+      toast(`${stream ? "Stream " : ""}规则已${enabled ? "启用" : "停用"}并立即生效`, "success");
+      await loadCore(true);
+      return true;
+    });
+  } finally {
+    delete targets[rule.id];
   }
+}
+function toggleRule(rule: ProxyRule, enabled: boolean) {
+  return toggleRuleEnabled(rule, enabled);
 }
 async function deleteCertificate(id: string, name: string) {
   if (
@@ -883,20 +895,8 @@ async function removeStreamRule(rule: StreamRule) {
   );
   if (ok !== undefined) await loadCore(true);
 }
-async function toggleStreamRule(rule: StreamRule, enabled: boolean) {
-  const ok = await mutate(() =>
-    request(`/streams/${rule.id}/enabled`, {
-      method: "POST",
-      body: jsonBody({ enabled }),
-    }),
-  );
-  if (ok !== undefined) {
-    toast(
-      enabled ? "Stream 规则已启用并立即生效" : "Stream 规则已停用并立即生效",
-      "success",
-    );
-    await loadCore(true);
-  }
+function toggleStreamRule(rule: StreamRule, enabled: boolean) {
+  return toggleRuleEnabled(rule, enabled, true);
 }
 async function copyConfig() {
   try {
@@ -1058,6 +1058,8 @@ onBeforeUnmount(() => {
           <template v-else-if="page === 'streams'">
             <StreamRulesPage
               :rules="state.stream_rules"
+              :dirty="state.dirty"
+              :pending-toggles="streamToggleTargets"
               :pools="state.upstream_pools"
               :certificates="state.certificates"
               :busy="busy"
@@ -1086,7 +1088,7 @@ onBeforeUnmount(() => {
               @inspect="setPage('errors')"
           /></template>
           <template v-else-if="page === 'rules'"
-            ><div class="toolbar"><span
+            ><div class="toolbar compact-rule-toolbar"><span
                 class="badge"
                 :class="state.dirty ? 'warning' : 'success'"
                 >{{ state.dirty ? "有未应用变更" : "配置已同步" }}</span>
@@ -1100,7 +1102,7 @@ onBeforeUnmount(() => {
                 <PhPlusCircle :size="17" aria-hidden="true" />添加代理规则
               </button>
             </div>
-<div class="toolbar rule-filters" role="search" aria-label="HTTP/HTTPS 规则筛选">
+<div class="toolbar rule-filters compact-rule-toolbar" role="search" aria-label="HTTP/HTTPS 规则筛选">
               <input
                 v-model="ruleSearch"
                 class="input search-input"
@@ -1147,16 +1149,9 @@ onBeforeUnmount(() => {
                   <tbody>
                     <tr v-for="rule in section.rules" :key="rule.id">
                       <td>
-                        <label class="switch"
-                          ><input
-                            type="checkbox"
-                            :checked="rule.enabled"
-                            :disabled="busy"
-                            :aria-label="`${rule.enabled ? '停用' : '启用'}规则 ${rule.name}`"
-                            @change="
-                              requestRuleToggle(rule, $event)
-                            " /><span></span
-                        ></label>
+                        <RuleStatusSwitch :enabled="rule.enabled" :pending-enabled="httpToggleTargets[rule.id]"
+                          :disabled="busy" :label="`${rule.enabled ? '停用' : '启用'}规则 ${rule.name}`"
+                          @change="toggleRule(rule, $event)" />
                       </td>
                       <td>
                         <div class="rule-name">{{ rule.name }}</div>
@@ -1202,7 +1197,7 @@ onBeforeUnmount(() => {
             </template
           >
           <template v-else-if="page === 'certificates'"
-            ><div class="toolbar">
+            ><div class="toolbar compact-rule-toolbar">
               <div class="notice">
                 只保存 PEM
                 文件，不会把私钥返回到浏览器。证书目录权限为
@@ -1549,19 +1544,7 @@ onBeforeUnmount(() => {
                 : "导入 SSL/TLS 证书"
             }}
           </h2>
-          <p>
-            {{
-              modal === "rule"
-                ? "保存前会进行结构化校验；正式应用时还会执行 nginx -t。"
-                : "证书链必须与私钥匹配，支持 RSA 和 ECDSA PEM。"
-            }}
-          </p>
-        </div>
-        <div v-if="modal === 'rule'" class="rule-header-actions">
-          <button type="button" class="button ghost" :disabled="busy" @click="closeModal">取消</button>
-          <button type="submit" form="proxy-rule-form" class="button primary" :disabled="busy">
-            {{ busy ? "处理中…" : editingRule ? "保存修改" : "保存规则" }}
-          </button>
+          <p v-if="modal === 'certificate'">证书链必须与私钥匹配，支持 RSA 和 ECDSA PEM。</p>
         </div>
         <button type="button" class="icon-button modal-close" aria-label="关闭" @click="closeModal">
           <PhX :size="20" aria-hidden="true" />
@@ -1590,6 +1573,12 @@ onBeforeUnmount(() => {
           @cancel="closeModal"
         />
       </div>
+      <footer v-if="modal === 'rule'" class="modal-footer rule-editor-footer">
+        <button type="button" class="button ghost" :disabled="busy" @click="closeModal">取消</button>
+        <button type="submit" form="proxy-rule-form" class="button primary" :disabled="busy">
+          {{ busy ? "处理中…" : "保存并应用" }}
+        </button>
+      </footer>
     </section>
   </div>
   <Teleport to="body">
@@ -1677,11 +1666,11 @@ onBeforeUnmount(() => {
 .admin-logout span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
 .rate-limit-manager-backdrop { position: fixed; inset: 0; z-index: 105; display: grid; place-items: center; padding: 20px; background: rgba(18,25,31,.58); }
 .rate-limit-manager { width: min(720px, calc(100vw - 40px)); max-height: calc(100vh - 28px); overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-solid); box-shadow: 0 24px 64px rgba(0,0,0,.22); }
-.rate-limit-manager-header { min-height: 56px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.rate-limit-manager-header { min-height: 44px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 16px; border-bottom: 1px solid var(--line); }
 .rate-limit-manager-header > div { min-width: 0; display: flex; align-items: baseline; gap: 14px; }
-.rate-limit-manager-header h2 { flex: 0 0 auto; margin: 0; font-size: 17px; }
+.rate-limit-manager-header h2 { flex: 0 0 auto; margin: 0; font-size: 16px; line-height: 24px; }
 .rate-limit-manager-header p { margin: 0; color: var(--muted); font-size: 13px; }
-.rate-limit-manager-header .icon-button { width: 32px; height: 32px; }
+.rate-limit-manager-header .icon-button { width: 30px; height: 30px; }
 .rate-limit-manager-body { min-height: 0; overflow: hidden; }
 @media (max-width: 720px) {
   .rate-limit-manager-backdrop { padding: 10px; }

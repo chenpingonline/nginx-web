@@ -86,7 +86,7 @@ function savedResult(saved?: UpstreamPool, error?: string) {
 }
 </script>
 <template>
-  <div class="toolbar">
+  <div class="toolbar compact-rule-toolbar">
     <div class="notice pool-description">
       转发服务组可以被多个 HTTP 或 TCP/UDP
       规则复用，并统一配置负载均衡与故障恢复。
