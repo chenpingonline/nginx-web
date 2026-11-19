@@ -137,20 +137,20 @@ onBeforeUnmount(() => { close(); clearTimeout(searchTimer); });
 .app-select.select { position: relative; padding-right: 30px; }
 .app-select::after { content: ""; position: absolute; right: 12px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .app-select { text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-select-menu { z-index: 10000; display: flex; flex-direction: column; overflow: hidden; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-solid); color: var(--text); box-shadow: 0 8px 24px rgb(0 0 0 / 14%); font-size: 15px; }
+.app-select-menu { z-index: 10000; display: flex; flex-direction: column; overflow: hidden; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-solid); color: var(--text); box-shadow: 0 8px 24px rgb(0 0 0 / 14%); font-size: var(--control-font-size); }
 .app-select-options { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) var(--surface-soft); }
 .app-select-options::-webkit-scrollbar { width: 9px; }
 .app-select-options::-webkit-scrollbar-track { background: var(--surface-soft); border-radius: 999px; }
 .app-select-options::-webkit-scrollbar-thumb { min-height: 28px; border: 2px solid var(--surface-soft); border-radius: 999px; background: var(--line-strong); }
 .app-select-options::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 .app-select-search-wrap { position: relative; flex: 0 0 auto; margin: 2px 3px 6px; }
-.app-select-search { box-sizing: border-box; width: 100%; height: 34px; padding: 6px 28px 6px 30px; border: 1px solid var(--line); border-radius: 7px; outline: none; background: var(--surface-soft); color: var(--text); font: inherit; }
+.app-select-search { box-sizing: border-box; width: 100%; height: var(--control-height); padding: 4px 28px 4px 30px; border: 1px solid var(--line); border-radius: 7px; outline: none; background: var(--surface-soft); color: var(--text); font: inherit; }
 .app-select-search:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
 .app-select-search::-webkit-search-cancel-button { cursor: pointer; }
-.app-select-search-icon { position: absolute; left: 11px; top: 9px; width: 10px; height: 10px; border: 1.5px solid var(--text-muted); border-radius: 50%; pointer-events: none; }
+.app-select-search-icon { position: absolute; left: 11px; top: 7px; width: 10px; height: 10px; border: 1.5px solid var(--text-muted); border-radius: 50%; pointer-events: none; }
 .app-select-search-icon::after { content: ''; position: absolute; width: 5px; height: 1.5px; right: -4px; bottom: -2px; border-radius: 999px; background: var(--text-muted); transform: rotate(45deg); transform-origin: left center; }
 .app-select-empty { padding: 18px 12px; color: var(--text-muted); text-align: center; }
-.app-select-option { min-height: 32px; display: flex; gap: 7px; align-items: center; padding: 6px 9px; border-radius: 5px; cursor: pointer; line-height: 20px; overflow-wrap: anywhere; }
+.app-select-option { min-height: var(--control-height); display: flex; gap: 7px; align-items: center; padding: 4px 9px; border-radius: 5px; cursor: pointer; line-height: 20px; overflow-wrap: anywhere; }
 .app-select-option > span:last-child { min-width: 0; }
 .app-select-option.highlighted { background: var(--surface-soft); }
 .app-select-option.selected { color: var(--accent-dark); background: var(--accent-soft); }

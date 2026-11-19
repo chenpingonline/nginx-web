@@ -522,12 +522,12 @@ watch(
 .stream-proxy-options .checkbox-row { white-space: nowrap; }
 #stream-rule-form .stream-pool-field { grid-template-columns: 112px minmax(0, 250px); column-gap: 10px; }
 .stream-pool-field > label:first-child { white-space: nowrap; }
-.stream-form .field > label:first-child { min-height: 34px; font-size: 15px; font-weight: 620; }
-.stream-form .input, .stream-form .select { height: 34px; min-height: 34px; padding-inline: 11px; border-radius: 8px; font-size: 15px; }
+.stream-form .field > label:first-child { min-height: var(--control-height); font-size: var(--control-font-size); font-weight: 500; }
+.stream-form .input, .stream-form .select { height: var(--control-height); min-height: var(--control-height); padding-inline: 10px; border-radius: var(--control-radius); font-size: var(--control-font-size); }
 .stream-form .app-select.select { padding-right: 30px; }
-.stream-form .textarea { min-height: 66px; padding: 9px 11px; border-radius: 8px; font-size: 15px; }
+.stream-form .textarea { min-height: var(--textarea-height); padding: 5px 10px; border-radius: var(--control-radius); font-size: var(--control-font-size); }
 .stream-form .input[type="number"] { width: min(100%, 145px); }
-.stream-form .checkbox-row { min-height: 34px; gap: 8px; font-size: 15px; }
+.stream-form .checkbox-row { min-height: var(--control-height); gap: 8px; font-size: var(--control-font-size); }
 .stream-form .checkbox-row input { width: 17px; height: 17px; }
 .stream-form .field > .checkbox-row { grid-column: 2; }
 .stream-connection-limit-label { align-self: center; }

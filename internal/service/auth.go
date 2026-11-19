@@ -36,8 +36,10 @@ func (s *AppService) initializeAppliedAuth() {
 		}
 	} else if state.Dirty {
 		state.AuthProfiles = nil
+		state.GatewayRoutes = nil
 	}
 	s.setAppliedAuthProfiles(state.AuthProfiles)
+	s.setAppliedGatewayRoutes(state.GatewayRoutes)
 }
 
 func (s *AppService) setAppliedAuthProfiles(profiles []domain.AuthProfile) {
@@ -61,7 +63,7 @@ func (s *AppService) CreateAuthProfile(input AuthProfileInput) (domain.AuthProfi
 		profile.Users[index].CreatedAt = now
 		profile.Users[index].UpdatedAt = now
 	}
-	if err := s.store.Update(func(state *State) error {
+	if err := s.updateState(func(state *State) error {
 		state.AuthProfiles = append(state.AuthProfiles, profile)
 		if err := domain.ValidateState(*state); err != nil {
 			return err
@@ -79,7 +81,7 @@ func (s *AppService) UpdateAuthProfile(id string, input AuthProfileInput) (domai
 		return domain.AuthProfile{}, errors.New("认证策略 ID 不合法")
 	}
 	var result domain.AuthProfile
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		for index := range state.AuthProfiles {
 			if state.AuthProfiles[index].ID != id {
 				continue
@@ -108,7 +110,7 @@ func (s *AppService) DeleteAuthProfile(id string) error {
 	if !domain.ValidID(id) {
 		return errors.New("认证策略 ID 不合法")
 	}
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for _, rule := range state.Rules {
 			if rule.Authentication.Enabled && rule.Authentication.ProfileID == id {
 				return errors.New("认证策略仍被规则使用，请先关闭或切换规则认证")

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
-version=1.30.4
-checksum=4261dc90e9e47c1c4041276e9aaa3d48ebe2e664f728e14fa95ae6c67d57a08b
+version=1.30.7
+checksum=2565b5c837050e958f70fb0f73c48e2bca4542ad349fd356f46fb0c72610bc6e
 curl -fL --retry 3 --connect-timeout 20 "https://nginx.org/download/nginx-${version}.tar.gz" -o nginx.tar.gz
 printf '%s  nginx.tar.gz\n' "$checksum" | sha256sum -c -
 tar -xzf nginx.tar.gz

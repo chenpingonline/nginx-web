@@ -42,15 +42,16 @@ type NginxStatus = domain.NginxStatus
 type ApplyResult = domain.ApplyResult
 
 type AppService struct {
-	paths               Paths
-	store               *Store
-	nginx               *NginxManager
-	mu                  sync.Mutex
-	metrics             *metrics.Collector
-	streamMetrics       *metrics.StreamCollector
-	acme                *acmemanager.Manager
-	authMu              sync.RWMutex
-	appliedAuthProfiles []domain.AuthProfile
+	paths                Paths
+	store                *Store
+	nginx                *NginxManager
+	mu                   sync.Mutex
+	metrics              *metrics.Collector
+	streamMetrics        *metrics.StreamCollector
+	acme                 *acmemanager.Manager
+	authMu               sync.RWMutex
+	appliedAuthProfiles  []domain.AuthProfile
+	appliedGatewayRoutes []domain.GatewayRoute
 }
 
 type Overview struct {
@@ -100,6 +101,13 @@ func New(paths Paths) (*AppService, error) {
 		return nil, err
 	}
 	service.initializeAppliedAuth()
+	// Repair stale flags only against independent evidence of activation.
+	initial := store.Snapshot()
+	if applied, known := service.appliedState(initial); known && initial.Dirty != !sameToggleConfiguration(initial, applied) {
+		if err := service.updateState(func(*State) error { return nil }); err != nil {
+			return nil, fmt.Errorf("修正配置同步状态失败: %w", err)
+		}
+	}
 	return service, nil
 }
 
@@ -119,7 +127,7 @@ func (s *AppService) Prepare() (ApplyResult, error) {
 }
 
 func (s *AppService) Overview() Overview {
-	state := s.store.Snapshot()
+	state := s.State()
 	_, appliedKnown := s.appliedState(state)
 	return Overview{
 		AppName:          domain.AppName,
@@ -139,11 +147,13 @@ func (s *AppService) Overview() Overview {
 }
 
 func (s *AppService) State() State {
-	return s.store.Snapshot()
+	state := s.store.Snapshot()
+	s.reconcileDraft(&state)
+	return state
 }
 
 func (s *AppService) UpdateSettings(settings Settings) error {
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		candidate := State{Settings: settings}
 		domain.ApplyStateDefaults(&candidate)
 		state.Settings = candidate.Settings
@@ -176,7 +186,7 @@ func (s *AppService) CreateUpstreamPool(input UpstreamPool) (UpstreamPool, error
 	input.CreatedAt = now
 	input.UpdatedAt = now
 	domain.NormalizeUpstreamPool(&input)
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		state.UpstreamPools = append(state.UpstreamPools, input)
 		state.Dirty = true
 		return nil
@@ -189,7 +199,7 @@ func (s *AppService) UpdateUpstreamPool(id string, input UpstreamPool) (Upstream
 		return UpstreamPool{}, errors.New("转发服务组 ID 不合法")
 	}
 	var updated UpstreamPool
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		for index := range state.UpstreamPools {
 			if state.UpstreamPools[index].ID != id {
 				continue
@@ -212,7 +222,7 @@ func (s *AppService) DeleteUpstreamPool(id string) error {
 	if !domain.ValidID(id) {
 		return errors.New("转发服务组 ID 不合法")
 	}
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for _, rule := range state.Rules {
 			if rule.UpstreamPoolID == id {
 				return fmt.Errorf("转发服务组仍被规则 %q 使用", rule.Name)
@@ -245,7 +255,7 @@ func (s *AppService) CreateRateLimitPolicy(input RateLimitPolicy) (RateLimitPoli
 	input.CreatedAt = now
 	input.UpdatedAt = now
 	domain.NormalizeRateLimitPolicy(&input)
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		state.RateLimitPolicies = append(state.RateLimitPolicies, input)
 		state.Dirty = true
 		return nil
@@ -258,7 +268,7 @@ func (s *AppService) UpdateRateLimitPolicy(id string, input RateLimitPolicy) (Ra
 		return RateLimitPolicy{}, errors.New("限流策略 ID 不合法")
 	}
 	var updated RateLimitPolicy
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		for index := range state.RateLimitPolicies {
 			if state.RateLimitPolicies[index].ID != id {
 				continue
@@ -281,7 +291,7 @@ func (s *AppService) DeleteRateLimitPolicy(id string) error {
 	if !domain.ValidID(id) {
 		return errors.New("限流策略 ID 不合法")
 	}
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for _, rule := range state.Rules {
 			if rule.RateLimitPolicyID == id {
 				return fmt.Errorf("限流策略仍被规则 %q 使用", rule.Name)
@@ -304,7 +314,7 @@ func (s *AppService) CreateStreamRule(input StreamRule) (StreamRule, error) {
 	input.CreatedAt = now
 	input.UpdatedAt = now
 	domain.NormalizeStreamRule(&input)
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		state.StreamRules = append(state.StreamRules, input)
 		state.Dirty = true
 		return nil
@@ -317,7 +327,7 @@ func (s *AppService) UpdateStreamRule(id string, input StreamRule) (StreamRule, 
 		return StreamRule{}, errors.New("Stream 规则 ID 不合法")
 	}
 	var updated StreamRule
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		for index := range state.StreamRules {
 			if state.StreamRules[index].ID != id {
 				continue
@@ -340,7 +350,7 @@ func (s *AppService) DeleteStreamRule(id string) error {
 	if !domain.ValidID(id) {
 		return errors.New("Stream 规则 ID 不合法")
 	}
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for index := range state.StreamRules {
 			if state.StreamRules[index].ID == id {
 				state.StreamRules = append(state.StreamRules[:index], state.StreamRules[index+1:]...)
@@ -364,7 +374,7 @@ func (s *AppService) CreateRule(input ProxyRule) (ProxyRule, error) {
 	snapshot := s.store.Snapshot()
 	domain.ResolveRuleGroup(&input, snapshot.RuleGroups)
 	domain.NormalizeRule(&input, snapshot.Settings)
-	if err := s.store.Update(func(state *State) error {
+	if err := s.updateState(func(state *State) error {
 		state.Rules = append(state.Rules, input)
 		if err := pathsecurity.ValidateState(*state); err != nil {
 			return err
@@ -382,7 +392,7 @@ func (s *AppService) UpdateRule(id string, input ProxyRule) (ProxyRule, error) {
 		return ProxyRule{}, errors.New("规则 ID 不合法")
 	}
 	var updated ProxyRule
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		for index := range state.Rules {
 			if state.Rules[index].ID != id {
 				continue
@@ -409,7 +419,7 @@ func (s *AppService) DeleteRule(id string) error {
 	if !domain.ValidID(id) {
 		return errors.New("规则 ID 不合法")
 	}
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for index := range state.Rules {
 			if state.Rules[index].ID != id {
 				continue
@@ -521,7 +531,7 @@ func (s *AppService) ImportCertificate(input CertificateInput) (CertificateMeta,
 	if err := os.Rename(tempDir, finalDir); err != nil {
 		return CertificateMeta{}, err
 	}
-	if err := s.store.Update(func(state *State) error {
+	if err := s.updateState(func(state *State) error {
 		state.Certificates = append(state.Certificates, meta)
 		state.Dirty = true
 		return nil
@@ -585,7 +595,7 @@ func (s *AppService) DeleteCertificate(id string) error {
 	if err := s.acme.RemoveForCertificate(id); err != nil {
 		return err
 	}
-	if err := s.store.Update(func(state *State) error {
+	if err := s.updateState(func(state *State) error {
 		for index := range state.Certificates {
 			if state.Certificates[index].ID == id {
 				state.Certificates = append(state.Certificates[:index], state.Certificates[index+1:]...)
@@ -609,32 +619,49 @@ func (s *AppService) Apply(summary string) (ApplyResult, error) {
 	state := s.store.Snapshot()
 	result, err := s.nginx.Apply(state)
 	if err != nil {
-		_ = s.store.Update(func(current *State) error {
+		_ = s.updateState(func(current *State) error {
 			current.LastApplyMessage = err.Error()
 			current.LastApplyError = err.Error()
 			return nil
 		})
 		return ApplyResult{}, err
 	}
+	return s.recordAppliedState(state, result, summary)
+}
+
+// Caller holds s.mu; draft saves may still arrive while Nginx is activating.
+func (s *AppService) recordAppliedState(state State, result ApplyResult, summary string) (ApplyResult, error) {
 	now := time.Now().UTC()
-	if err := s.store.Update(func(current *State) error {
-		current.Dirty = false
-		current.DraftRevisionID = ""
+	// Persist the exact candidate sent to Nginx, not a newer concurrent draft.
+	applied := domain.CloneState(state)
+	applied.Dirty = false
+	applied.DraftRevisionID = ""
+	applied.LastAppliedAt = &now
+	applied.PortMigrationPending = false
+	applied.RuntimeConfigVersion = runtimeConfigVersion
+	applied.LastApplyMessage = result.Message
+	applied.LastApplyError = ""
+	data, persistErr := json.Marshal(applied)
+	if persistErr == nil {
+		persistErr = fileutil.WriteFileAtomic(s.paths.AppliedState(), data, 0600)
+	}
+	s.setAppliedAuthProfiles(applied.AuthProfiles)
+	s.setAppliedGatewayRoutes(applied.GatewayRoutes)
+	if err := s.updateState(func(current *State) error {
 		current.LastAppliedAt = &now
 		current.PortMigrationPending = false
 		current.RuntimeConfigVersion = runtimeConfigVersion
 		current.LastApplyMessage = result.Message
 		current.LastApplyError = ""
+		if persistErr != nil {
+			current.LastApplyError = "Nginx 已应用，但生效快照保存失败，无法确认同步状态"
+		}
 		return nil
 	}); err != nil {
 		return result, fmt.Errorf("Nginx 已应用，但保存应用状态失败: %w", err)
 	}
-	applied := s.store.Snapshot()
-	s.setAppliedAuthProfiles(applied.AuthProfiles)
-	if data, marshalErr := json.Marshal(applied); marshalErr == nil {
-		if persistErr := fileutil.WriteFileAtomic(s.paths.AppliedState(), data, 0o600); persistErr != nil {
-			result.Message += "；首页生效配置记录保存失败"
-		}
+	if persistErr != nil {
+		return result, fmt.Errorf("Nginx 已应用，但保存生效快照失败: %w", persistErr)
 	}
 	if strings.TrimSpace(summary) == "" {
 		summary = "保存并应用配置"
@@ -650,7 +677,7 @@ func (s *AppService) Apply(summary string) (ApplyResult, error) {
 func (s *AppService) DiscardDraft() (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current := s.store.Snapshot()
+	current := s.State()
 	if !current.Dirty {
 		return State{}, errors.New("当前没有待放弃的草稿")
 	}
@@ -669,10 +696,10 @@ func (s *AppService) DiscardDraft() (State, error) {
 	if err := pathsecurity.ValidateState(applied); err != nil {
 		return State{}, err
 	}
-	if err := s.store.Replace(applied); err != nil {
+	if err := s.replaceState(applied); err != nil {
 		return State{}, err
 	}
-	return s.store.Snapshot(), nil
+	return s.State(), nil
 }
 
 func (s *AppService) NginxStart() (ApplyResult, error) {
@@ -778,10 +805,10 @@ func (s *AppService) RestoreRevision(id string) (State, error) {
 	if err := pathsecurity.ValidateState(next); err != nil {
 		return State{}, err
 	}
-	if err := s.store.Replace(next); err != nil {
+	if err := s.replaceState(next); err != nil {
 		return State{}, err
 	}
-	return s.store.Snapshot(), nil
+	return s.State(), nil
 }
 
 func (s *AppService) DeleteRevision(id string) error {

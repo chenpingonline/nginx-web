@@ -300,7 +300,7 @@ function createLocationID() {
 }
 async function addLocation() {
   const id = createLocationID();
-  form.locations.push({
+  form.locations.unshift({
     id,
     name: `路径 ${form.locations.length + 1}`,
     enabled: true,
@@ -309,7 +309,7 @@ async function addLocation() {
     settings: defaultLocation(),
   });
   await nextTick();
-  document.getElementById(`location-${id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById(`location-${id}`)?.closest(".rule-tab-panel")?.scrollTo({ top: 0, behavior: "smooth" });
 }
 </script>
 <template>

@@ -44,7 +44,7 @@ func (s *AppService) deployACME(id, name string, r *certificate.Resource) (strin
 		meta.IPAddresses = append(meta.IPAddresses, ip.String())
 	}
 	err = s.nginx.DeployCertificate(id, r.Certificate, r.PrivateKey, func() error {
-		return s.store.Update(func(state *State) error {
+		return s.updateState(func(state *State) error {
 			for i, old := range state.Certificates {
 				if old.ID == id {
 					meta.CreatedAt = old.CreatedAt

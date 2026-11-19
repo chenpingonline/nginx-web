@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NGINX_VERSION="${NGINX_VERSION:-1.30.4}"
-NGINX_SOURCE_SHA256="${NGINX_SOURCE_SHA256:-4261dc90e9e47c1c4041276e9aaa3d48ebe2e664f728e14fa95ae6c67d57a08b}"
+NGINX_VERSION="${NGINX_VERSION:-1.30.7}"
+NGINX_SOURCE_SHA256="${NGINX_SOURCE_SHA256:-2565b5c837050e958f70fb0f73c48e2bca4542ad349fd356f46fb0c72610bc6e}"
 NGINX_SOURCE_URL="https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
 BUILD_IMAGE="${NGINX_BUILD_IMAGE:-alpine:3.21}"
 APK_MIRROR="${NGINX_APK_MIRROR:-https://mirrors.aliyun.com/alpine}"
@@ -12,7 +12,8 @@ die() {
   exit 1
 }
 
-case "$(uname -m)" in
+BUILD_ARCH="${NGINX_TARGET_ARCH:-$(uname -m)}"
+case "$BUILD_ARCH" in
   aarch64|arm64)
     TARGET_ARCH="arm64"
     PLATFORM="linux/arm64"
@@ -27,7 +28,7 @@ case "$(uname -m)" in
     OUTPUT_ARCH="x86_64"
     FILE_PATTERN='x86-64|x86_64'
     ;;
-  *) die "仅支持 ARM64 和 AMD64 主机，当前架构：$(uname -m)" ;;
+  *) die "仅支持 ARM64 和 AMD64 目标架构，当前目标：$BUILD_ARCH" ;;
 esac
 
 OUTPUT_DIR="${1:-$PWD/nginx-${TARGET_ARCH}-output}"

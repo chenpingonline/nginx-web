@@ -182,11 +182,12 @@ func (s *AppService) RestoreBackup(backup Backup) (State, error) {
 	if err := s.saveRevision(current, "导入备份前的配置"); err != nil {
 		return State{}, fmt.Errorf("保存恢复前配置失败: %w", err)
 	}
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		state.Settings = next.Settings
 		state.RuleGroups = next.RuleGroups
 		state.Rules = next.Rules
 		state.StreamRules = next.StreamRules
+		state.GatewayRoutes = next.GatewayRoutes
 		state.UpstreamPools = next.UpstreamPools
 		state.RateLimitPolicies = next.RateLimitPolicies
 		state.Certificates = append(state.Certificates, added...)

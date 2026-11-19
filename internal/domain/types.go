@@ -15,7 +15,7 @@ import (
 
 const (
 	AppName       = "nginx-web"
-	NginxVersion  = "1.30.4"
+	NginxVersion  = "1.30.7"
 	SchemaVersion = 5
 )
 
@@ -91,6 +91,7 @@ type CertificateMeta struct {
 }
 
 type State struct {
+	GatewayRoutes        []GatewayRoute    `json:"gateway_routes"`
 	RuntimeConfigVersion int               `json:"runtime_config_version,omitempty"`
 	RuntimeMinListenPort int               `json:"runtime_min_listen_port,omitempty"`
 	PortMigrationPending bool              `json:"port_migration_pending,omitempty"`
@@ -346,6 +347,9 @@ func ValidateRule(rule ProxyRule, certs map[string]CertificateMeta, pools ...map
 }
 
 func ValidateState(state State) error {
+	if err := ValidateGatewayRoutes(state.GatewayRoutes); err != nil {
+		return err
+	}
 	ApplyStateDefaults(&state)
 	if err := ValidateRuleGroups(state); err != nil {
 		return err

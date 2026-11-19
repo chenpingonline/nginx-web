@@ -63,14 +63,14 @@ function addSplit() {
     <article class="card">
       <header class="card-header">
         <div>
-          <h2>基础设置</h2>
-          <p>默认入口和配置历史</p>
+          <h2>常用设置</h2>
+          <p>设置新建代理的默认端口；没有 HTTP 规则时，HTTP 端口也用于默认入口。不会修改已有规则。</p>
         </div>
 
       </header>
       <div class="card-body form-grid">
         <div class="field">
-          <label>默认 HTTP 端口</label
+          <label>新建代理默认 HTTP 端口</label
           ><input
             v-model.number="form.default_http_port"
             class="input"
@@ -81,7 +81,7 @@ function addSplit() {
           />
         </div>
         <div class="field">
-          <label>默认 HTTPS 端口</label
+          <label>新建代理默认 HTTPS 端口</label
           ><input
             v-model.number="form.default_https_port"
             class="input"
@@ -91,92 +91,6 @@ function addSplit() {
             required
           />
         </div>
-        <div class="field">
-          <label>配置历史保留数量</label
-          ><input
-            v-model.number="form.revision_limit"
-            class="input"
-            type="number"
-            min="1"
-            max="100"
-            required
-          />
-        </div>
-      </div>
-    </article>
-    <article class="card">
-      <header class="card-header"><div><h2>动态路由变量</h2><p>用 Map、Geo 和 Split Clients 生成可在 Header、重写和转发服务配置中引用的变量</p></div></header>
-      <div class="card-body settings-stack">
-        <details class="advanced-box"><summary>Map（{{ form.routing.maps.length }}）</summary><div class="form-grid compact-grid">
-          <div v-for="(item, index) in form.routing.maps" :key="`map-${index}`" class="routing-editor full">
-            <input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$host" /><input v-model.trim="item.variable" class="input" placeholder="$backend" /><input v-model="item.default" class="input" placeholder="默认值" />
-            <label class="checkbox-row"><input v-model="item.hostnames" type="checkbox" />域名匹配</label><button type="button" class="button danger compact" @click="form.routing.maps.splice(index, 1)">删除</button>
-            <div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="匹配值" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div>
-            <button type="button" class="button ghost compact fit" @click="item.entries.push({ key: '', value: '' })">添加条目</button>
-          </div><button type="button" class="button ghost compact fit" @click="addMap">添加 Map</button>
-        </div></details>
-        <details class="advanced-box"><summary>Geo（{{ form.routing.geos.length }}）</summary><div class="form-grid compact-grid">
-          <div v-for="(item, index) in form.routing.geos" :key="`geo-${index}`" class="routing-editor full"><input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$remote_addr" /><input v-model.trim="item.variable" class="input" placeholder="$region" /><input v-model="item.default" class="input" placeholder="默认值" /><button type="button" class="button danger compact" @click="form.routing.geos.splice(index, 1)">删除</button><div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="IP / CIDR" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div><button type="button" class="button ghost compact fit" @click="item.entries.push({ key: '', value: '' })">添加条目</button></div>
-          <button type="button" class="button ghost compact fit" @click="addGeo">添加 Geo</button>
-        </div></details>
-        <details class="advanced-box"><summary>Split Clients（{{ form.routing.splits.length }}）</summary><div class="form-grid compact-grid">
-          <div v-for="(item, index) in form.routing.splits" :key="`split-${index}`" class="routing-editor full"><input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$request_id" /><input v-model.trim="item.variable" class="input" placeholder="$variant" /><button type="button" class="button danger compact" @click="form.routing.splits.splice(index, 1)">删除</button><div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="10% 或 *" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div><button type="button" class="button ghost compact fit" @click="item.entries.splice(Math.max(0, item.entries.length - 1), 0, { key: '10%', value: '' })">添加比例</button></div>
-          <button type="button" class="button ghost compact fit" @click="addSplit">添加 Split</button>
-        </div></details>
-      </div>
-    </article>
-    <article class="card">
-      <header class="card-header">
-        <div>
-          <h2>Worker 与文件资源</h2>
-          <p>自动适配当前运行环境的文件句柄上限，避免 worker_connections 警告</p>
-        </div>
-      </header>
-      <div class="card-body form-grid">
-        <div class="field">
-          <label>Worker 数量</label
-          ><input
-            v-model.number="form.worker_processes"
-            class="input"
-            type="number"
-            min="0"
-            max="128"
-          /><span class="field-help">0 表示根据 CPU 自动选择。</span>
-        </div>
-        <div class="field">
-          <label>Worker Connections</label
-          ><input
-            v-model.number="form.worker_connections"
-            class="input"
-            type="number"
-            min="128"
-            max="1048576"
-          />
-        </div>
-        <div class="field">
-          <label>Worker 文件句柄上限</label
-          ><input
-            v-model.number="form.worker_rlimit_nofile"
-            class="input"
-            type="number"
-            min="0"
-            max="1048576"
-          /><span class="field-help">0 表示自动限制到当前系统软上限。</span>
-        </div>
-        <div class="field">
-          <label>事件处理</label
-          ><label class="checkbox-row"
-            ><input
-              v-model="form.multi_accept"
-              type="checkbox"
-            />一次接受多个连接</label
-          ><label class="checkbox-row"
-            ><input v-model="form.file_aio" type="checkbox" />启用文件
-            AIO</label
-          >
-        </div>
-        <div class="field"><label>线程池线程数</label><input v-model.number="form.thread_pool_threads" class="input" type="number" min="0" max="1024" /><span class="field-help">0 表示关闭；启用后文件 I/O 使用线程池。</span></div>
-        <div class="field"><label>线程池队列上限</label><input v-model.number="form.thread_pool_queue" class="input" type="number" min="1" max="1048576" /></div>
       </div>
     </article>
     <article class="card">
@@ -259,6 +173,84 @@ function addSplit() {
           <label>MIME 类型</label
           ><textarea v-model="gzipTypes" class="textarea"></textarea>
         </div>
+      </div>
+    </article>
+    <details class="card settings-advanced">
+      <summary class="settings-advanced-summary">高级选项<span>动态路由变量、性能调优、TLS 与日志</span></summary>
+      <div class="card-body settings-stack">
+    <article class="card">
+      <header class="card-header"><div><h2>动态路由变量</h2><p>用 Map、Geo 和 Split Clients 生成可在 Header、重写和转发服务配置中引用的变量</p></div></header>
+      <div class="card-body settings-stack">
+        <details class="advanced-box"><summary>Map（{{ form.routing.maps.length }}）</summary><div class="form-grid compact-grid">
+          <div v-for="(item, index) in form.routing.maps" :key="`map-${index}`" class="routing-editor full">
+            <input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$host" /><input v-model.trim="item.variable" class="input" placeholder="$backend" /><input v-model="item.default" class="input" placeholder="默认值" />
+            <label class="checkbox-row"><input v-model="item.hostnames" type="checkbox" />域名匹配</label><button type="button" class="button danger compact" @click="form.routing.maps.splice(index, 1)">删除</button>
+            <div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="匹配值" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div>
+            <button type="button" class="button ghost compact fit" @click="item.entries.push({ key: '', value: '' })">添加条目</button>
+          </div><button type="button" class="button ghost compact fit" @click="addMap">添加 Map</button>
+        </div></details>
+        <details class="advanced-box"><summary>Geo（{{ form.routing.geos.length }}）</summary><div class="form-grid compact-grid">
+          <div v-for="(item, index) in form.routing.geos" :key="`geo-${index}`" class="routing-editor full"><input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$remote_addr" /><input v-model.trim="item.variable" class="input" placeholder="$region" /><input v-model="item.default" class="input" placeholder="默认值" /><button type="button" class="button danger compact" @click="form.routing.geos.splice(index, 1)">删除</button><div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="IP / CIDR" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div><button type="button" class="button ghost compact fit" @click="item.entries.push({ key: '', value: '' })">添加条目</button></div>
+          <button type="button" class="button ghost compact fit" @click="addGeo">添加 Geo</button>
+        </div></details>
+        <details class="advanced-box"><summary>Split Clients（{{ form.routing.splits.length }}）</summary><div class="form-grid compact-grid">
+          <div v-for="(item, index) in form.routing.splits" :key="`split-${index}`" class="routing-editor full"><input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$request_id" /><input v-model.trim="item.variable" class="input" placeholder="$variant" /><button type="button" class="button danger compact" @click="form.routing.splits.splice(index, 1)">删除</button><div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="10% 或 *" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div><button type="button" class="button ghost compact fit" @click="item.entries.splice(Math.max(0, item.entries.length - 1), 0, { key: '10%', value: '' })">添加比例</button></div>
+          <button type="button" class="button ghost compact fit" @click="addSplit">添加 Split</button>
+        </div></details>
+      </div>
+    </article>
+    <article class="card">
+      <header class="card-header">
+        <div>
+          <h2>Worker 与文件资源</h2>
+          <p>自动适配当前运行环境的文件句柄上限，避免 worker_connections 警告</p>
+        </div>
+      </header>
+      <div class="card-body form-grid">
+        <div class="field">
+          <label>Worker 数量</label
+          ><input
+            v-model.number="form.worker_processes"
+            class="input"
+            type="number"
+            min="0"
+            max="128"
+          /><span class="field-help">0 表示根据 CPU 自动选择。</span>
+        </div>
+        <div class="field">
+          <label>Worker Connections</label
+          ><input
+            v-model.number="form.worker_connections"
+            class="input"
+            type="number"
+            min="128"
+            max="1048576"
+          />
+        </div>
+        <div class="field">
+          <label>Worker 文件句柄上限</label
+          ><input
+            v-model.number="form.worker_rlimit_nofile"
+            class="input"
+            type="number"
+            min="0"
+            max="1048576"
+          /><span class="field-help">0 表示自动限制到当前系统软上限。</span>
+        </div>
+        <div class="field">
+          <label>事件处理</label
+          ><label class="checkbox-row"
+            ><input
+              v-model="form.multi_accept"
+              type="checkbox"
+            />一次接受多个连接</label
+          ><label class="checkbox-row"
+            ><input v-model="form.file_aio" type="checkbox" />启用文件
+            AIO</label
+          >
+        </div>
+        <div class="field"><label>线程池线程数</label><input v-model.number="form.thread_pool_threads" class="input" type="number" min="0" max="1024" /><span class="field-help">0 表示关闭；启用后文件 I/O 使用线程池。</span></div>
+        <div class="field"><label>线程池队列上限</label><input v-model.number="form.thread_pool_queue" class="input" type="number" min="1" max="1048576" /></div>
       </div>
     </article>
     <article class="card">
@@ -360,6 +352,8 @@ function addSplit() {
         <div class="field"><label>轮转文件保留数</label><input v-model.number="form.logging.rotate_keep" class="input" type="number" min="1" max="100" /></div>
       </div>
     </article>
+      </div>
+    </details>
     <div class="settings-actions-shell"><div class="sticky-actions">
       <div class="settings-app-info">
         <a
@@ -406,6 +400,10 @@ function addSplit() {
 </template>
 
 <style scoped>
+.settings-advanced-summary { padding: 18px 20px; cursor: pointer; font-weight: 600; }
+.settings-advanced-summary span { display: block; margin-top: 6px; color: var(--text-muted); font-size: 13px; font-weight: 400; }
+.settings-advanced[open] > summary { border-bottom: 1px solid var(--line); }
+
 /* Override the legacy global link colors only for the settings repository mark. */
 .settings-stack .app-update-github {
   color: var(--text);

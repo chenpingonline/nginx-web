@@ -17,6 +17,7 @@ import (
 	acmemanager "github.com/chenpingonline/nginx-web/internal/acme"
 	"github.com/chenpingonline/nginx-web/internal/adminauth"
 	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/gatewayclient"
 	"github.com/chenpingonline/nginx-web/internal/metrics"
 	appservice "github.com/chenpingonline/nginx-web/internal/service"
 )
@@ -43,6 +44,10 @@ func NewStandalone(service *appservice.AppService, web fs.FS) *API {
 }
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, gatewayPrefix+"/proxy/") {
+		a.serveGatewayProxy(w, r)
+		return
+	}
 	a.setSecurityHeaders(w)
 	if strings.HasPrefix(r.URL.Path, "/internal/basic-auth/") {
 		a.handleInternalBasicAuth(w, r)
@@ -145,8 +150,66 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 			return
 		}
 		writeJSON(w, http.StatusOK, a.service.Dashboard(minutes, r.URL.Query().Get("rule")))
+	case apiPath == "/api/gateway-apps" && r.Method == http.MethodGet:
+		if a.standalone {
+			writeAPIError(w, http.StatusNotFound, "仅飞牛模式支持应用识别")
+			return
+		}
+		result, err := a.service.DiscoverGatewayApps()
+		writeResult(w, http.StatusOK, result, err)
+	case apiPath == "/api/gateway-probe" && r.Method == http.MethodPost:
+		if a.standalone {
+			writeAPIError(w, http.StatusNotFound, "仅飞牛模式支持网关转发")
+			return
+		}
+		var input domain.GatewayRoute
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		domain.NormalizeGatewayRoute(&input)
+		input.ID = "abcdef123456"
+		input.Name = "连接检测"
+		input.Path = "probe"
+		if err := domain.ValidateGatewayRoutes([]domain.GatewayRoute{input}); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, gatewayclient.Probe(r.Context(), input))
+	case apiPath == "/api/gateway-routes" && r.Method == http.MethodPost:
+		if a.standalone {
+			writeAPIError(w, http.StatusNotFound, "仅飞牛模式支持网关转发")
+			return
+		}
+		var input domain.GatewayRoute
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		route, err := a.service.SaveGatewayRoute("", input)
+		writeResult(w, http.StatusCreated, route, err)
+	case strings.HasPrefix(apiPath, "/api/gateway-routes/"):
+		if a.standalone {
+			writeAPIError(w, http.StatusNotFound, "仅飞牛模式支持网关转发")
+			return
+		}
+		id := strings.TrimPrefix(apiPath, "/api/gateway-routes/")
+		switch r.Method {
+		case http.MethodPut:
+			var input domain.GatewayRoute
+			if !decodeJSON(w, r, &input) {
+				return
+			}
+			route, err := a.service.SaveGatewayRoute(id, input)
+			writeResult(w, http.StatusOK, route, err)
+		case http.MethodDelete:
+			err := a.service.DeleteGatewayRoute(id)
+			writeResult(w, http.StatusOK, map[string]bool{"ok": err == nil}, err)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	case apiPath == "/api/overview" && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, a.service.Overview())
+	case apiPath == "/api/draft-changes" && r.Method == http.MethodGet:
+		writeJSON(w, http.StatusOK, a.service.DraftChanges())
 	case apiPath == "/api/state" && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, domain.PublicState(a.service.State()))
 	case apiPath == "/api/auth-profiles" && r.Method == http.MethodGet:

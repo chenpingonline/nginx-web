@@ -26,7 +26,7 @@ func (s *AppService) ToggleRule(id string, stream, enabled bool) (ApplyResult, e
 	var wasRunning bool
 	var oldSnapshot []byte
 	var snapshotExisted bool
-	err := s.store.Update(func(draft *State) error {
+	err := s.updateState(func(draft *State) error {
 		var known bool
 		base, known = s.appliedState(*draft)
 		if !known || draft.LastAppliedAt == nil || base.LastAppliedAt == nil || !draft.LastAppliedAt.Equal(*base.LastAppliedAt) {
@@ -138,6 +138,7 @@ func (s *AppService) ToggleRule(id string, stream, enabled bool) (ApplyResult, e
 		return ApplyResult{}, err
 	}
 	s.setAppliedAuthProfiles(candidate.AuthProfiles)
+	s.setAppliedGatewayRoutes(candidate.GatewayRoutes)
 	if err := s.saveRevision(candidate, result.Message); err != nil {
 		result.Message += "；配置历史保存失败: " + err.Error()
 	}
@@ -145,39 +146,43 @@ func (s *AppService) ToggleRule(id string, stream, enabled bool) (ApplyResult, e
 }
 
 func sameToggleConfiguration(left, right State) bool {
-	clean := func(state State) State {
-		state = domain.CloneState(state)
-		domain.ApplyStateDefaults(&state)
-		// Storage format versions are not user configuration changes.
-		state.SchemaVersion = 0
-		state.RuntimeConfigVersion = 0
-		state.RuntimeMinListenPort = 0
-		state.PortMigrationPending = false
-		state.Dirty = false
-		state.DraftRevisionID = ""
-		state.LastAppliedAt = nil
-		state.LastApplyMessage = ""
-		state.LastApplyError = ""
-		state.UpdatedAt = time.Time{}
-		policies := make(map[string]domain.RateLimitSettings, len(state.RateLimitPolicies))
-		for _, policy := range state.RateLimitPolicies {
-			policies[policy.ID] = policy.Settings
-		}
-		for i := range state.Rules {
-			state.Rules[i].UpdatedAt = time.Time{}
-			// A referenced policy overrides the legacy inline parameters. Older
-			// renderers wrote resolved values into applied snapshots only.
-			if settings, ok := policies[state.Rules[i].RateLimitPolicyID]; ok {
-				state.Rules[i].RateLimit = settings
-			}
-		}
-		for i := range state.StreamRules {
-			state.StreamRules[i].UpdatedAt = time.Time{}
-		}
-		normalizeEmptyConfigSlices(reflect.ValueOf(&state).Elem())
-		return state
+	return reflect.DeepEqual(configurationContent(left), configurationContent(right))
+}
+
+func configurationContent(state State) State {
+	state = domain.CloneState(state)
+	domain.ApplyStateDefaults(&state)
+	// Storage format versions are not user configuration changes.
+	state.SchemaVersion = 0
+	state.RuntimeConfigVersion = 0
+	state.RuntimeMinListenPort = 0
+	state.PortMigrationPending = false
+	state.Dirty = false
+	state.DraftRevisionID = ""
+	state.LastAppliedAt = nil
+	state.LastApplyMessage = ""
+	state.LastApplyError = ""
+	state.UpdatedAt = time.Time{}
+	// Certificate inventory is global; renewal is deployed independently.
+	state.Certificates = nil
+	policies := make(map[string]domain.RateLimitSettings, len(state.RateLimitPolicies))
+	for _, policy := range state.RateLimitPolicies {
+		policies[policy.ID] = policy.Settings
 	}
-	return reflect.DeepEqual(clean(left), clean(right))
+	for i := range state.Rules {
+		state.Rules[i].UpdatedAt = time.Time{}
+		// A referenced policy overrides the legacy inline parameters. Older
+		// renderers wrote resolved values into applied snapshots only.
+		if settings, ok := policies[state.Rules[i].RateLimitPolicyID]; ok {
+			state.Rules[i].RateLimit = settings
+		}
+	}
+	for i := range state.StreamRules {
+		state.StreamRules[i].UpdatedAt = time.Time{}
+	}
+	clearConfigurationTimes(reflect.ValueOf(&state).Elem())
+	normalizeEmptyConfigSlices(reflect.ValueOf(&state).Elem())
+	return state
 }
 
 // Older JSON snapshots use null or omit lists that newer writers emit as [].
@@ -201,6 +206,33 @@ func normalizeEmptyConfigSlices(value reflect.Value) {
 	case reflect.Pointer:
 		if !value.IsNil() {
 			normalizeEmptyConfigSlices(value.Elem())
+		}
+	}
+}
+
+// Creation and edit times describe storage activity, not configuration content.
+func clearConfigurationTimes(value reflect.Value) {
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Field(i)
+			if !field.CanSet() {
+				continue
+			}
+			name := value.Type().Field(i).Name
+			if (name == "CreatedAt" || name == "UpdatedAt") && field.Type() == reflect.TypeOf(time.Time{}) {
+				field.SetZero()
+			} else {
+				clearConfigurationTimes(field)
+			}
+		}
+	case reflect.Slice:
+		for i := 0; i < value.Len(); i++ {
+			clearConfigurationTimes(value.Index(i))
+		}
+	case reflect.Pointer:
+		if !value.IsNil() {
+			clearConfigurationTimes(value.Elem())
 		}
 	}
 }

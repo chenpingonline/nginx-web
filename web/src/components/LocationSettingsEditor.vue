@@ -338,7 +338,7 @@ async function directoryAction(action: "select" | "authorize") {
 .directory-authorization-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }
 .static-directory-control { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .rule-modal .rule-form-grid .static-directory-control .input { width: 50%; min-width: 0; }
-.static-directory-control .button { flex: none; white-space: nowrap; min-height: 34px; }
+.static-directory-control .button { flex: none; white-space: nowrap; min-height: var(--control-height); }
 @media (max-width: 760px) {
   .rule-modal .rule-form-grid .static-directory-control .input { flex: 1; width: 0; }
 }

@@ -18,7 +18,7 @@ func (s *AppService) SaveRuleGroup(id string, input domain.RuleGroup) (domain.Ru
 	if !input.TLS {
 		input.CertificateID = ""
 	}
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		found := false
 		for i := range state.RuleGroups {
 			if state.RuleGroups[i].ID == id {
@@ -47,7 +47,7 @@ func (s *AppService) SaveRuleGroup(id string, input domain.RuleGroup) (domain.Ru
 }
 
 func (s *AppService) DeleteRuleGroup(id string) error {
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for i, group := range state.RuleGroups {
 			if group.ID != id {
 				continue

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCH="${1:?用法: fetch-nginx.sh <x86|arm64> [目标路径]}"
 DEST="${2:-}"
-VERSION="1.30.4"
+VERSION="1.30.7"
 
 case "$ARCH" in
   x86|x86_64|amd64)

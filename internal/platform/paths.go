@@ -7,6 +7,7 @@ import (
 )
 
 type Paths struct {
+	AppRegistryDir string
 	AppDest        string
 	EtcDir         string
 	VarDir         string
@@ -75,6 +76,7 @@ func LoadPaths() (Paths, error) {
 	runDir := filepath.Join(nginxPrefix, "run")
 
 	paths := Paths{
+		AppRegistryDir: firstNonEmpty(os.Getenv("FNPROXY_APP_REGISTRY"), "/var/apps"),
 		AppDest:        appDest,
 		EtcDir:         etcDir,
 		VarDir:         varDir,

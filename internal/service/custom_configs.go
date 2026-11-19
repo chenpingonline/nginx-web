@@ -12,7 +12,7 @@ func (s *AppService) SaveCustomConfig(original string, input domain.CustomConfig
 	if !strings.HasSuffix(input.Content, "\n") {
 		input.Content += "\n"
 	}
-	err := s.store.Update(func(state *State) error {
+	err := s.updateState(func(state *State) error {
 		configs := append([]domain.CustomConfig(nil), state.CustomConfigs...)
 		found := false
 		if original != "" {
@@ -40,7 +40,7 @@ func (s *AppService) SaveCustomConfig(original string, input domain.CustomConfig
 }
 
 func (s *AppService) DeleteCustomConfig(name string) error {
-	return s.store.Update(func(state *State) error {
+	return s.updateState(func(state *State) error {
 		for index := range state.CustomConfigs {
 			if state.CustomConfigs[index].Name == name {
 				state.CustomConfigs = append(state.CustomConfigs[:index], state.CustomConfigs[index+1:]...)

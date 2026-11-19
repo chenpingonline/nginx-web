@@ -11,6 +11,7 @@ frontend-build:
 	@test -d web/node_modules || npm --prefix web ci
 	FNPROXY_FRONTEND_MODE=$(FRONTEND_MODE) FNPROXY_PERMISSION_MODE=$(PERMISSION_MODE) npm --prefix web run build
 test: frontend-build
+	npm --prefix web run test:gateway
 	go test ./...
 	go test -tags full_ports ./...
 integration:

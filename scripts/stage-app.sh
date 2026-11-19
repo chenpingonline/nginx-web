@@ -20,7 +20,7 @@ for name in nginx-web-server nginx; do
   file "$OUT/bin/$name" | grep -Eq "$PATTERN" || { echo "Wrong architecture: $name" >&2; exit 1; }
 done
 file "$OUT/bin/nginx" | grep -Fq 'statically linked' || { echo 'Nginx must be statically linked' >&2; exit 1; }
-grep -aFq 'nginx version: nginx/1.30.4' "$OUT/bin/nginx" || { echo 'Wrong Nginx version' >&2; exit 1; }
+grep -aFq 'nginx version: nginx/1.30.7' "$OUT/bin/nginx" || { echo 'Wrong Nginx version' >&2; exit 1; }
 cp "$ROOT/third_party/nginx/mime.types" "$OUT/etc/mime.types"
 cp "$ROOT/LICENSE" "$ROOT/NGINX_LICENSE" "$ROOT/NOTICE" "$ROOT/THIRD_PARTY_LICENSES.md" "$OUT/licenses/"
 chmod 755 "$OUT/bin/"*

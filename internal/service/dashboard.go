@@ -57,15 +57,23 @@ type Dashboard struct {
 func (s *AppService) appliedState(state State) (State, bool) {
 	data, err := os.ReadFile(s.paths.AppliedState())
 	var applied State
-	if err == nil && json.Unmarshal(data, &applied) == nil && applied.LastAppliedAt != nil && state.LastAppliedAt != nil && applied.LastAppliedAt.Equal(*state.LastAppliedAt) && domain.ValidateRuntimePorts(applied) == nil {
-		return applied, true
+	if err == nil && json.Unmarshal(data, &applied) == nil && applied.LastAppliedAt != nil {
+		// A conflicting snapshot is evidence of a different activation (for example
+		// an interrupted metadata write). An older history entry cannot override it.
+		if state.LastAppliedAt == nil || !applied.LastAppliedAt.Equal(*state.LastAppliedAt) {
+			return State{}, false
+		}
+		if domain.ValidateRuntimePorts(applied) == nil {
+			return applied, true
+		}
 	}
 	// Upgrade path: successful revisions already contain the last applied state.
-	if revisions, err := s.ListRevisions(); err == nil && len(revisions) > 0 && domain.ValidateRuntimePorts(revisions[0].State) == nil {
-		return revisions[0].State, true
-	}
-	if !state.Dirty && state.LastAppliedAt != nil {
-		return state, true
+	if revisions, err := s.ListRevisions(); err == nil && state.LastAppliedAt != nil {
+		for _, revision := range revisions {
+			if revision.State.LastAppliedAt != nil && revision.State.LastAppliedAt.Equal(*state.LastAppliedAt) && domain.ValidateRuntimePorts(revision.State) == nil {
+				return revision.State, true
+			}
+		}
 	}
 	return State{}, false
 }

@@ -54,14 +54,14 @@ func (s *AppService) migrationBaseline(draft State) (State, bool, error) {
 func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	draft := s.State()
+	draft := s.store.Snapshot()
 	if draft.RuntimeConfigVersion >= runtimeConfigVersion && !draft.PortMigrationPending {
 		// Repair representation-only dirty flags left by earlier migrations,
 		// including installations that already have the completion marker.
 		// This does not activate a draft or regenerate the running configuration.
 		if draft.Dirty && draft.LastApplyError == "" {
 			if applied, known := s.appliedState(draft); known && sameToggleConfiguration(draft, applied) {
-				err := s.store.Update(func(current *State) error {
+				err := s.updateState(func(current *State) error {
 					if sameToggleConfiguration(*current, applied) {
 						current.Dirty = false
 						current.DraftRevisionID = ""
@@ -128,7 +128,7 @@ func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 			return result, true, fmt.Errorf("保存迁移历史失败，可重试: %w", err)
 		}
 	}
-	err = s.store.Update(func(current *State) error {
+	err = s.updateState(func(current *State) error {
 		current.RuntimeConfigVersion = runtimeConfigVersion
 		current.PortMigrationPending = false
 		current.LastAppliedAt = candidate.LastAppliedAt
@@ -144,6 +144,7 @@ func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 		return result, true, fmt.Errorf("保存迁移状态失败，可重试: %w", err)
 	}
 	s.setAppliedAuthProfiles(candidate.AuthProfiles)
+	s.setAppliedGatewayRoutes(candidate.GatewayRoutes)
 	result.Message = candidate.LastApplyMessage
 	return result, true, nil
 }

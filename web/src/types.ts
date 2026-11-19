@@ -3,6 +3,7 @@ export type Page =
   | "errors"
   | "backup"
   | "rules"
+  | "gateway"
   | "streams"
   | "upstreams"
   | "rate-limits"
@@ -320,7 +321,9 @@ export interface StreamRule extends StreamRuleInput {
   created_at: string;
   updated_at: string;
 }
+export interface GatewayRoute { id: string; name: string; path: string; target: string; enabled: boolean; compatibility?: "" | "subpath" | "ikuai-v4"; tls_fingerprint?: string; tls_trust_target?: string; }
 export interface State {
+  gateway_routes?: GatewayRoute[];
   rule_groups?: RuleGroup[];
   draft_revision_id?: string;
   schema_version: number;
@@ -570,3 +573,13 @@ export interface ACMELogEntry { time: string; level: string; message: string; co
 export interface ACMERun { id: string; kind: string; started_at: string; finished_at?: string; status: string; entries: ACMELogEntry[]; omitted_entries?: number }
 
 export interface ACMEDiagnosticCheck { name: string; status: 'ok' | 'info' | 'error'; message: string; domain?: string; resolver?: string; elapsed_ms: number }
+
+export interface DraftChanges {
+  status: "synced" | "pending" | "unknown" | "uninitialized";
+  changes: {
+    section: string;
+    name: string;
+    operation: "added" | "deleted" | "modified";
+    fields: { path: string; before: string; after: string; sensitive: boolean }[];
+  }[];
+}

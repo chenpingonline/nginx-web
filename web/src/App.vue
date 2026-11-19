@@ -3,7 +3,10 @@ import { minListenPort } from "./permissionMode";
 import type { ACMEInput } from "./types";
 import ACMEJobs from "./components/ACMEJobs.vue";
 import AppSelect from "./components/AppSelect.vue";
+import RevisionRetentionForm from "./components/RevisionRetentionForm.vue";
 import RevisionPreview from "./components/RevisionPreview.vue";
+import DraftChangesDialog from "./components/DraftChangesDialog.vue";
+import type { DraftChanges } from "./types";
 import {
   computed,
   nextTick,
@@ -32,6 +35,7 @@ import {
 } from "@phosphor-icons/vue";
 import { errorMessage, jsonBody, request } from "./api";
 import { highlightLog, searchLogLines } from "./logHighlight";
+const fnosMode = !__STANDALONE__;
 const appVersion = __APP_VERSION__;
 defineProps<{ adminUsername?: string; loggingOut?: boolean }>();
 const emit = defineEmits<{ logout: [] }>();
@@ -48,6 +52,7 @@ import RateLimitPolicyManager from "./components/RateLimitPolicyManager.vue";
 import BackupPage, { type BackupFile } from "./components/BackupPage.vue";
 import RuntimeSettingsForm from "./components/RuntimeSettingsForm.vue";
 import SidebarIcon from "./components/SidebarIcon.vue";
+import GatewayRoutesPage from "./components/GatewayRoutesPage.vue";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -103,6 +108,12 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     groupLabel: "代理配置",
   },
   {
+    id: "gateway",
+    icon: "http",
+    label: "飞牛网关",
+    subtitle: "通过飞牛访问域名按路径转发 HTTP 服务",
+  },
+  {
     id: "streams",
     icon: "stream",
     label: "TCP/UDP 代理",
@@ -153,6 +164,7 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     subtitle: "调整默认端口与历史保留策略",
   },
 ];
+const visiblePages = computed(() => pages.filter(item => item.id !== "gateway" || fnosMode));
 const page = ref<Page>("dashboard"),
   overview = ref<Overview | null>(null),
   state = ref<State | null>(null),
@@ -173,16 +185,17 @@ const appliedConfigurationKnown = computed(() => overview.value?.applied_known ?
 const restoredRevision = computed(() => state.value?.dirty && state.value.draft_revision_id
   ? revisions.value.find(item => item.id === state.value!.draft_revision_id) : undefined);
 const showDraftPreview = ref(false);
-const draftPreview = computed<Revision | null>(() => state.value ? {
-  id: "当前草稿",
-  summary: !appliedConfigurationKnown.value
-    ? "待初始化，首次应用后开始生成配置历史"
-    : state.value.dirty ? "待应用，以当前编辑内容为准" : "已同步",
-  created_at: state.value.updated_at,
-  rule_count: (state.value.rules?.length ?? 0) + (state.value.stream_rules?.length ?? 0),
-  enabled_count: 0,
-  state: state.value,
-} : null);
+const draftChanges = ref<DraftChanges | null>(null);
+const draftChangesLoading = ref(false);
+const draftChangesTrigger = ref<HTMLButtonElement | null>(null);
+async function openDraftChanges() {
+  draftChangesLoading.value = true;
+  try {
+    draftChanges.value = await request<DraftChanges>("/draft-changes");
+    showDraftPreview.value = true;
+  } catch (error) { toast(errorMessage(error), "error"); }
+  finally { draftChangesLoading.value = false; }
+}
 const errorScope = ref({ minutes: 60, rule: "" });
 const ruleProtocol = ref<"all" | "http" | "https">("all");
 const ruleEnabled = ref<"all" | "enabled" | "disabled">("all");
@@ -196,7 +209,7 @@ const loading = ref(true),
   logsLoading = ref(false),
   configTab = ref("master");
 const previewRevisionID = ref<string | null>(null);
-const activePreview = computed(() => showDraftPreview.value ? draftPreview.value : revisions.value.find(item => item.id === previewRevisionID.value) ?? null);
+const activePreview = computed(() => revisions.value.find(item => item.id === previewRevisionID.value) ?? null);
 function closePreview() {
   showDraftPreview.value = false;
   previewRevisionID.value = null;
@@ -766,6 +779,10 @@ async function saveSettings(value: Settings) {
   );
   if (ok !== undefined) await loadCore(true);
 }
+async function saveRevisionLimit(value: number) {
+  if (!state.value) return;
+  await saveSettings({ ...state.value.settings, revision_limit: value });
+}
 async function testSettings(value: Settings) {
   const result = await mutate(() => request<ApplyResult>("/settings/test", {
     method: "POST", body: jsonBody(value),
@@ -956,7 +973,7 @@ onBeforeUnmount(() => {
   <div class="app-shell">
     <aside class="sidebar">
       <nav class="nav" aria-label="主导航">
-        <template v-for="item in pages" :key="item.id">
+        <template v-for="item in visiblePages" :key="item.id">
           <h2 v-if="item.groupLabel" class="nav-group-label">{{ item.groupLabel }}</h2>
         <button
           type="button"
@@ -996,12 +1013,12 @@ onBeforeUnmount(() => {
                     ? "正在连接…"
                     : overview.nginx.running
                       ? overview.dirty
-                        ? "运行中 · 有未应用变更"
+                        ? (!overview.applied_known ? "运行中 · 配置状态待确认" : "运行中 · 有未应用变更")
                         : "运行中"
                       : "已停止"
               }}</span>
             </div>
-            <span class="sidebar-version">Nginx {{ overview?.nginx_version ?? "1.30.4" }}</span>
+            <span class="sidebar-version">Nginx {{ overview?.nginx_version ?? "1.30.7" }}</span>
           </div>
         </div>
       </div>
@@ -1055,6 +1072,7 @@ onBeforeUnmount(() => {
             @overview="overview = $event" @edit="openDashboardRule"
           />
           <BackupPage v-else-if="page === 'backup'" :state="state" :busy="busy" @download="downloadBackup" @restore="restoreBackup" @apply="applyConfiguration" />
+          <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" :dirty="state.dirty" :busy="busy" @refresh="loadCore(true)" @apply="applyConfiguration" />
           <template v-else-if="page === 'streams'">
             <StreamRulesPage
               :rules="state.stream_rules"
@@ -1091,7 +1109,7 @@ onBeforeUnmount(() => {
             ><div class="toolbar compact-rule-toolbar"><span
                 class="badge"
                 :class="state.dirty ? 'warning' : 'success'"
-                >{{ state.dirty ? "有未应用变更" : "配置已同步" }}</span>
+                >{{ !appliedConfigurationKnown ? (state.last_applied_at ? "配置状态待确认" : "待初始化") : state.dirty ? "有未应用变更" : "配置已同步" }}</span>
               <span class="rule-port-hint">监听端口 {{ minListenPort }}–65535</span>
               <span class="spacer"></span
               ><button class="button ghost" :disabled="busy" @click="loadCore()">
@@ -1311,18 +1329,18 @@ onBeforeUnmount(() => {
                   <h2>
                     {{ appliedConfigurationKnown ? '当前草稿' : '当前配置' }}
                     <span class="badge" :class="!appliedConfigurationKnown || state.dirty ? 'warning' : 'success'">
-                      {{ !appliedConfigurationKnown ? '待初始化' : state.dirty ? '待应用' : '已同步' }}
+                      {{ !appliedConfigurationKnown ? (state.last_applied_at ? '待确认' : '待初始化') : state.dirty ? '待应用' : '已同步' }}
                     </span>
                   </h2>
                   <template v-if="state.dirty && state.draft_revision_id">
                     <p class="draft-restored-title">已恢复：{{ restoredRevision ? `${formatDate(restoredRevision.created_at)} · ${restoredRevision.summary || '配置快照'}` : state.draft_revision_id }}</p>
                     <p>此版本已写入当前草稿，尚未应用到 Nginx。后续编辑会保留在草稿中。</p>
                   </template>
-                  <p v-else-if="!appliedConfigurationKnown">默认配置尚未完成首次应用，目前没有可放弃的已应用配置。</p>
+                  <p v-else-if="!appliedConfigurationKnown">{{ state.last_applied_at ? '无法确认上次生效的配置，暂时不能判断是否有待应用修改。' : '尚无成功应用记录，首次应用后可查看配置差异。' }}</p>
                   <p v-else>{{ state.dirty ? '当前有尚未应用的修改，运行配置尚未切换。' : '当前配置已同步，没有待应用的修改。' }}</p>
                 </div>
                 <span class="spacer"></span>
-                <button class="button ghost small" aria-haspopup="dialog" @click="showDraftPreview = true">{{ appliedConfigurationKnown ? '查看当前草稿' : '查看当前配置' }}</button>
+                <button ref="draftChangesTrigger" class="button ghost small" aria-haspopup="dialog" :disabled="draftChangesLoading" @click="openDraftChanges">{{ draftChangesLoading ? '正在对比…' : '查看草稿变更' }}</button>
                 <button class="button ghost small" @click="page = 'rules'">编辑代理规则</button>
                 <button
                   v-if="state.dirty && appliedConfigurationKnown"
@@ -1340,7 +1358,7 @@ onBeforeUnmount(() => {
                   :title="appliedConfigurationKnown ? '将当前草稿应用到 Nginx，并生成新的历史版本' : '首次应用当前配置，并创建第一个历史版本'"
                   @click="applyConfiguration"
                 >
-                  <PhCheckCircle :size="14" aria-hidden="true" />{{ appliedConfigurationKnown ? '保存并应用' : '初始化并应用' }}
+                  <PhCheckCircle :size="14" aria-hidden="true" />{{ appliedConfigurationKnown || state.last_applied_at ? '保存并应用' : '初始化并应用' }}
                 </button>
               </header>
               <div v-if="state.last_apply_error" class="notice warning" role="alert">上次应用失败：{{ state.last_apply_error }}</div>
@@ -1360,6 +1378,7 @@ onBeforeUnmount(() => {
                 </button>
 
               </header>
+              <RevisionRetentionForm :limit="state.settings.revision_limit" :busy="busy" @save="saveRevisionLimit" />
               <div v-if="revisions.length" class="table-wrap">
                 <table class="table">
                   <thead>
@@ -1493,7 +1512,8 @@ onBeforeUnmount(() => {
     <div class="workspace-scrollbar" aria-hidden="true"></div>
     </div>
   </div>
-  <RevisionPreview v-if="activePreview" :revision="activePreview" :title="showDraftPreview ? '当前草稿预览' : '历史配置预览'" @close="closePreview" />
+  <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
+  <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">
       <header class="modal-header">

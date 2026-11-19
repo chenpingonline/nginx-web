@@ -1,6 +1,6 @@
 # Docker 版
 
-Docker 版将 Vue 页面、Go 管理服务和 Nginx 1.30.4 放在同一个镜像中，通过独立管理员账户访问，不需要飞牛桌面或网关。构建支持 `linux/amd64` 和 `linux/arm64`；FPK 构建位于独立的 nginx-web-fnos 仓库，继续使用飞牛网关认证。此版本不包含 WAF 实验功能。
+Docker 版将 Vue 页面、Go 管理服务和 Nginx 1.30.7 放在同一个镜像中，通过独立管理员账户访问，不需要飞牛桌面或网关。构建支持 `linux/amd64` 和 `linux/arm64`；FPK 构建位于独立的 nginx-web-fnos 仓库，继续使用飞牛网关认证。此版本不包含 WAF 实验功能。
 
 Docker 专用文件统一放在本目录：`Dockerfile`、`Dockerfile.dockerignore`、`compose.yaml`、`build-nginx.sh`、`tests/` 和本说明；离线镜像保存在 `docker/dist/`，不提交 Git。Go/Vue 源码继续由项目共享。
 
@@ -157,7 +157,7 @@ docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
 
 构建上下文必须是项目根目录，不能使用 `docker/` 作为上下文：`COPY` 的源路径相对于上下文解析。Compose 已配置 `context: ..` 和 `dockerfile: docker/Dockerfile`；手动构建请使用上面的 `-f` 命令。忽略规则使用 Docker 支持的 [Dockerfile 专用忽略文件](https://docs.docker.com/build/concepts/context/#filename-and-location)，排除密码、运行数据和离线镜像。
 
-多阶段构建编译 Vue 页面与静态 Go 程序，从官方 Nginx 1.30.4 源码校验 SHA-256 后编译代理核心，不使用本地 fnOS 二进制。构建上下文排除 Secret、运行数据、构建产物和实验二进制。
+多阶段构建编译 Vue 页面与静态 Go 程序，从官方 Nginx 1.30.7 源码校验 SHA-256 后编译代理核心，不使用本地 fnOS 二进制。构建上下文排除 Secret、运行数据、构建产物和实验二进制。
 
 构建网络无法访问默认 Go 下载源时可覆盖 `GOPROXY`，例如 `GOPROXY=https://goproxy.cn,direct docker compose up -d --build`，或给 `docker build` 加 `--build-arg GOPROXY=https://goproxy.cn,direct`。依赖仍由 `go.sum` 和 Go 校验机制验证，不关闭摘要检查。
 

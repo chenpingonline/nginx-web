@@ -8,7 +8,7 @@
 
 [![Build](https://github.com/chenpingonline/nginx-web/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/chenpingonline/nginx-web/actions/workflows/build.yml)
 ![Linux](https://img.shields.io/badge/Linux-AMD64%20%7C%20ARM64-2ea44f)
-[![NGINX](https://img.shields.io/badge/Core-NGINX%201.30.4-009639)](https://nginx.org/)
+[![NGINX](https://img.shields.io/badge/Core-NGINX%201.30.7-009639)](https://nginx.org/)
 [![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 [Linux 安装](linux/README.md) · [Docker 部署](docker/README.md) · [飞牛版](https://github.com/chenpingonline/nginx-web-fnos) · [使用指南](docs/user-guide.md) · [问题反馈](https://github.com/chenpingonline/nginx-web/issues)
@@ -28,7 +28,7 @@
 本仓库是唯一的功能源码仓库。Linux 和 Docker 在这里构建；[nginx-web-fnos](https://github.com/chenpingonline/nginx-web-fnos) 仅保留飞牛 FPK 的宿主集成及打包脚本，按核心提交构建同一份源码。
 
 - **可视化配置**：通过结构化表单管理域名、端口、路径、证书、负载均衡与访问控制。
-- **独立 Nginx**：内置 Nginx Open Source 1.30.4，使用自己的进程、配置与日志目录。
+- **独立 Nginx**：内置 Nginx Open Source 1.30.7，使用自己的进程、配置与日志目录。
 - **多种部署方式**：Linux 使用 systemd，Docker 使用持久化卷，飞牛使用桌面统一网关。
 - **配置校验与恢复**：应用前执行 `nginx -t`，失败时尝试恢复上一份有效配置；保存的草稿不会在重启时自动生效。
 
