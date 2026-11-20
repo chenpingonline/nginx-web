@@ -86,9 +86,12 @@ export interface SourceEntry {
   line: number;
   start: number;
   title: string;
-  detail: string;
+  entrances: string[];
+  targets: string[];
+  listeners: string[];
+  routes: string[];
   protocols: string[];
-  error?: boolean;
+  error?: string;
 }
 export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
   return files.flatMap((file) => {
@@ -102,24 +105,44 @@ export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
             .map((n) => n.words.slice(1).join(" "));
         const listens = values("listen");
         const stream = file.name.endsWith(".stream");
-        const routes = block.children.flatMap((n) =>
-          n.words[0] === "location"
-            ? [
-                n.words.join(" ") +
-                  " " +
-                  (n.children
-                    ?.find((d) => d.words[0] === "proxy_pass")
-                    ?.words.slice(1)
-                    .join(" ") ?? ""),
-              ]
-            : [],
-        );
+        const names = block.children
+          .filter((node) => node.words[0] === "server_name")
+          .flatMap((node) => node.words.slice(1));
+        const targets = new Set(values("proxy_pass"));
+        const routes: string[] = [];
+        function collectRoutes(nodes: Directive[]) {
+          for (const node of nodes) {
+            if (node.words[0] !== "location") continue;
+            const passes = (node.children || [])
+              .filter((child) => child.words[0] === "proxy_pass")
+              .map((child) => child.words.slice(1).join(" "));
+            passes.forEach((target) => targets.add(target));
+            routes.push([node.words.join(" "), ...passes].join(" → "));
+            if (node.children) collectRoutes(node.children);
+          }
+        }
+        collectRoutes(block.children);
+        const entrances = new Set<string>();
+        for (const listen of listens) {
+          const [address, ...options] = listen.split(/\s+/);
+          const protocol = stream ? (options.includes("udp") ? "udp" : "tcp")
+            : (options.includes("ssl") ? "https" : "http");
+          const port = /^\d+$/.test(address) ? address : /:(\d+)$/.exec(address)?.[1];
+          if (stream || !port || !names.length || address.startsWith("unix:")) {
+            entrances.add(protocol.toUpperCase() + " · " + address);
+          } else {
+            for (const name of names) entrances.add(protocol + "://" + name + ":" + port);
+          }
+        }
         entries.push({
           file,
           line: block.line,
           start: block.start,
           title: values("server_name").join(" ") || file.name,
-          detail: [...listens, ...values("proxy_pass"), ...routes].join(" · "),
+          entrances: [...entrances],
+          targets: [...targets],
+          listeners: listens,
+          routes,
           protocols: (listens.length ? listens : [""]).map((v) =>
             stream
               ? /\budp\b/.test(v)
@@ -137,9 +160,9 @@ export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
         line: Number(/第 (\d+) 行/.exec(String(e))?.[1] || 1),
         start: 0,
         title: file.name,
-        detail: (e as Error).message,
+        entrances: [], targets: [], listeners: [], routes: [],
         protocols: [],
-        error: true,
+        error: (e as Error).message,
       });
     }
     return entries;
@@ -154,7 +177,7 @@ export function matchSource(
   return (
     enabled !== "disabled" &&
     (protocol === "all" || entry.protocols.includes(protocol)) &&
-    [entry.file.name, entry.title, entry.detail]
+    [entry.file.name, entry.title, ...entry.entrances, ...entry.targets, ...entry.listeners, ...entry.routes, entry.error]
       .join(" ")
       .toLowerCase()
       .includes(search.trim().toLowerCase())
