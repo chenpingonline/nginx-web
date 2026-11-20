@@ -62,12 +62,14 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 	listen := reserved.Addr().(*net.TCPAddr).Port
 	reserved.Close()
 	var sites strings.Builder
-	for i, mode := range []string{"detect", "block", "off"} {
+	for i, mode := range []string{"detect", "block", "off", "excepted"} {
 		id := fmt.Sprintf("%016x", i+1)
 		r := domain.ProxyRule{ID: id, Enabled: true, Name: mode, Domains: []string{mode + ".example.net"}, ListenPort: listen, UpstreamScheme: "http", UpstreamHost: upstream.Hostname(), UpstreamPort: port}
 		domain.NormalizeRule(&r, domain.DefaultState().Settings)
 		var instances []domain.WAFInstance
-		if mode != "off" {
+		if mode == "block" || mode == "excepted" {
+			instances = []domain.WAFInstance{{ID: "0000000000000002", Mode: "block", Sites: []string{"0000000000000002", "0000000000000004"}, Exclusions: map[string][]int{"0000000000000004": {911100}}}}
+		} else if mode != "off" {
 			instances = []domain.WAFInstance{{ID: id, Mode: mode, Sites: []string{id}}}
 		}
 		site, err := manager.renderRuleServer(r, nil, nil, instances...)
@@ -116,6 +118,7 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 		want                            int
 	}{
 		{"detect", "BREW", "text/plain", "hello", 200}, {"block", "BREW", "text/plain", "hello", 403},
+		{"excepted", "BREW", "application/json", "{}", 200}, {"block", "BREW", "application/json", "{}", 403}, {"excepted", "BREW", "text/plain", "hello", 403},
 		{"off", "BREW", "text/plain", "hello", 200}, {"block", "POST", "application/json", `{"title":"hello"}`, 200},
 		{"detect", "POST", "application/json", `{"title":`, 200}, {"block", "POST", "application/json", `{"title":`, 400},
 	} {
@@ -133,7 +136,7 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != tc.want {
-			t.Fatalf("%s %s status=%d body=%s", tc.mode, tc.method, resp.StatusCode, data)
+			t.Fatalf("%s %s status=%d body=%s events=%+v", tc.mode, tc.method, resp.StatusCode, data, inspector.Events())
 		}
 		if tc.want == 200 {
 			if string(data) != tc.method+" "+uri+" "+body || received.Load() != before+1 {

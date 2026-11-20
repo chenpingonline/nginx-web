@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from "vue";
 import { request, errorMessage, jsonBody } from "../api";
 import type { State, WAFInstance } from "../types";
+import WAFRuleTable from "./WAFRuleTable.vue";
 import AppSelect from "./AppSelect.vue";
 const props = defineProps<{ state: State; busy: boolean }>();
 const emit = defineEmits<{ refresh: []; apply: [] }>();
@@ -35,12 +36,14 @@ const instances = computed(() => props.state.waf_instances ?? []);
 const dialog = ref<HTMLDialogElement>(),
   draft = ref<WAFInstance>(),
   deleting = ref(false);
+const tab = ref<"basic"|"rules">("basic");
 function siteName(id: string) {
   return props.state.rules.find((r) => r.id === id)?.domains.join(", ") ?? id;
 }
 async function edit(p?: WAFInstance, remove = false) {
+  tab.value = "basic";
   draft.value = p
-    ? { ...p, sites: [...(p.sites ?? [])] }
+    ? { ...p, sites: [...(p.sites ?? [])], exclusions: { ...p.exclusions } }
     : { id: "", name: "", mode: "detect", sites: [] };
   deleting.value = remove;
   error.value = "";
@@ -58,12 +61,19 @@ const available = computed(() =>
 async function save() {
   const p = draft.value;
   if (!p || saving.value) return;
+  if (!deleting.value && !p.name.trim()) {
+    tab.value = "basic";
+    error.value = "请输入实例名称";
+    return;
+  }
+  const exclusions = Object.fromEntries(Object.entries(p.exclusions ?? {})
+    .filter(([site, ids]) => p.sites.includes(site) && ids.length));
   saving.value = true;
   error.value = "";
   try {
     await request("/waf/instances" + (p.id ? "/" + p.id : ""), {
       method: deleting.value ? "DELETE" : p.id ? "PUT" : "POST",
-      body: deleting.value ? undefined : jsonBody(p),
+      body: deleting.value ? undefined : jsonBody({ ...p, exclusions }),
     });
     draft.value = undefined;
     emit("refresh");
@@ -194,17 +204,24 @@ onBeforeUnmount(() => {
       </table>
     </div>
   </section>
-  <dialog v-if="draft" ref="dialog" class="waf-dialog" aria-labelledby="waf-dialog-title"
+  <dialog v-if="draft" ref="dialog" class="waf-dialog" :class="{ wide: !deleting }" aria-labelledby="waf-dialog-title"
     @cancel.prevent="!saving && (draft = undefined)">
     <form @submit.prevent="save">
-      <h3 id="waf-dialog-title">
+      <header class="editor-title"><h3 id="waf-dialog-title">
         {{
           deleting ? "删除防护实例" : draft.id ? "编辑防护实例" : "创建防护实例"
         }}
-      </h3>
+        {{ !deleting && draft.id ? " · " + draft.name : "" }}
+      </h3><small v-if="!deleting">OWASP CRS 4.25.0</small><button type="button" class="icon-button" aria-label="关闭" :disabled="saving" @click="draft = undefined">×</button></header>
+      <nav v-if="!deleting" class="editor-tabs">
+        <button type="button" :aria-pressed="tab === 'basic'" @click="tab='basic'">基本设置</button>
+        <button type="button" :aria-pressed="tab === 'rules'" @click="tab='rules'">规则管理</button>
+      </nav>
       <p v-if="deleting">
         删除「{{ draft.name }}」并应用后，关联站点将停止使用此实例。
       </p>
+      <WAFRuleTable v-else-if="tab === 'rules'" :draft="draft" :site-name="siteName"
+        @change="(site, ids) => { if (draft) draft.exclusions = { ...draft.exclusions, [site]: ids }; }" />
       <template v-else
         ><label class="field-row"
           ><span>实例名称</span
@@ -336,6 +353,12 @@ footer {
   padding: 18px;
   width: min(440px, 90vw);
 }
+.waf-dialog.wide { width: min(680px, calc(100vw - 32px)); }
+.editor-title {display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.editor-title small {color:var(--text-muted);margin-left:auto}
+.editor-tabs {display:flex;gap:14px;border-bottom:1px solid var(--line);margin-bottom:10px}
+.editor-tabs button {padding:6px 2px;background:none;border:0;border-bottom:2px solid transparent;color:var(--text-muted);cursor:pointer}
+.editor-tabs button[aria-pressed="true"] {border-color:var(--accent);color:var(--text);font-weight:600}
 .waf-dialog::backdrop {
   background: #10182066;
 }

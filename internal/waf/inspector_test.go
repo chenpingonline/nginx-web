@@ -41,3 +41,33 @@ func TestOversizeBodyPolicy(t *testing.T) {
 		}
 	}
 }
+
+// Reuse one inspector, as the running service does. Restoring the default
+// must also work after a prior transaction has excluded this rule.
+func TestSiteRuleExclusionIsTransactionScoped(t *testing.T) {
+	inspector := new(Inspector)
+	const first = "0000000000000001"
+	const second = "0000000000000002"
+	for _, tc := range []struct {
+		site, mode string
+		status     int
+	}{
+		{first, "block:911100", http.StatusOK},
+		{second, "block", http.StatusForbidden},
+		{first, "block", http.StatusForbidden},
+	} {
+		req := httptest.NewRequest("BREW", "http://waf.example.test/", nil)
+		req.Header.Set("X-Fnproxy-Instance", "123456abcdef")
+		req.Header.Set("X-Fnproxy-Site", tc.site)
+		req.Header.Set("X-Fnproxy-Mode", tc.mode)
+		req.Header.Set("X-Fnproxy-Target", "generic")
+		req.Header.Set("X-Fnproxy-Protocol", "HTTP/1.1")
+		req.Header.Set("User-Agent", "nginx-web-test")
+		req.Header.Set("Accept", "application/json")
+		response := httptest.NewRecorder()
+		inspector.ServeHTTP(response, req)
+		if response.Code != tc.status {
+			t.Fatalf("site %s, mode %s: got %d, want %d", tc.site, tc.mode, response.Code, tc.status)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package nginx
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/chenpingonline/nginx-web/internal/domain"
@@ -35,6 +36,16 @@ func (m *Manager) writeWAF(b *strings.Builder, p domain.WAFInstance, r ProxyRule
 // X-Accel-Redirect to a named proxy location retains the original unparsed
 // URI, including encoded slashes, as well as the method and buffered body.
 func (m *Manager) writeInspectorProxy(b *strings.Builder, p domain.WAFInstance, r ProxyRule, target string) {
+	// Carry the applied site's exceptions inside an existing proxy-overwritten
+	// field. Older configurations already overwrite this field as well.
+	mode := p.Mode
+	if ids := p.Exclusions[r.ID]; len(ids) > 0 {
+		values := make([]string, len(ids))
+		for i, id := range ids {
+			values[i] = strconv.Itoa(id)
+		}
+		mode += ":" + strings.Join(values, ",")
+	}
 	fmt.Fprintf(b, `        auth_request off;
         proxy_request_buffering on;
         proxy_http_version 1.1;
@@ -47,5 +58,5 @@ func (m *Manager) writeInspectorProxy(b *strings.Builder, p domain.WAFInstance, 
         proxy_set_header X-Fnproxy-Protocol $server_protocol;
         proxy_set_header Connection "";
         proxy_pass %s;
-`, p.Mode, p.ID, r.ID, target, nginxQuote("http://unix:"+m.paths.WAFSocket()+":"))
+`, mode, p.ID, r.ID, target, nginxQuote("http://unix:"+m.paths.WAFSocket()+":"))
 }

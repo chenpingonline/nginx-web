@@ -3,14 +3,18 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/chenpingonline/nginx-web/internal/crscatalog"
 )
 
 type WAFInstance struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name"`
-	Mode  string   `json:"mode"`
-	Sites []string `json:"sites"`
+	Exclusions map[string][]int `json:"exclusions,omitempty"`
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	Mode       string           `json:"mode"`
+	Sites      []string         `json:"sites"`
 }
 
 func validateWAF(state State) error {
@@ -27,6 +31,18 @@ func validateWAF(state State) error {
 		ids[p.ID] = true
 		if p.Mode != "detect" && p.Mode != "block" {
 			return errors.New("未知的 WAF 模式")
+		}
+		for site, rules := range p.Exclusions {
+			if !slices.Contains(p.Sites, site) {
+				return errors.New("规则排除项必须属于已绑定站点")
+			}
+			seen := map[int]bool{}
+			for _, id := range rules {
+				if !crscatalog.Known(id) || seen[id] {
+					return fmt.Errorf("无效或重复的 CRS 规则 ID %d", id)
+				}
+				seen[id] = true
+			}
 		}
 		for _, id := range p.Sites {
 			if !sites[id] || bound[id] {

@@ -435,6 +435,7 @@ func (s *AppService) DeleteRule(id string) error {
 				for j, site := range p.Sites {
 					if site == id {
 						p.Sites = append(p.Sites[:j], p.Sites[j+1:]...)
+						delete(p.Exclusions, id)
 						break
 					}
 				}

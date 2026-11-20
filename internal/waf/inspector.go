@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/chenpingonline/nginx-web/internal/crscatalog"
 	"github.com/chenpingonline/nginx-web/internal/domain"
 	crs "github.com/corazawaf/coraza-coreruleset/v4"
 	"github.com/corazawaf/coraza/v3"
@@ -61,7 +63,7 @@ func (i *Inspector) store(e Event) {
 	}
 }
 func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	mode := r.Header.Get("X-Fnproxy-Mode")
+	mode, excluded, hasExclusions := strings.Cut(r.Header.Get("X-Fnproxy-Mode"), ":")
 	instance := r.Header.Get("X-Fnproxy-Instance")
 	site := r.Header.Get("X-Fnproxy-Site")
 	if !domain.ValidID(instance) || !domain.ValidID(site) || (mode != "block" && mode != "detect") {
@@ -85,6 +87,22 @@ func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := r.Header.Get("X-Fnproxy-Client")
 	tx := engine.NewTransaction()
 	defer tx.Close()
+	if hasExclusions {
+		// The pinned Coraza transaction exposes per-request rule removal.
+		scoped, ok := tx.(interface{ RemoveRuleByID(int) })
+		if !ok {
+			http.Error(w, "WAF 不支持站点规则排除", 503)
+			return
+		}
+		for _, raw := range strings.Split(excluded, ",") {
+			id, err := strconv.Atoi(raw)
+			if err != nil || !crscatalog.Known(id) {
+				http.Error(w, "无效的站点规则排除", 400)
+				return
+			}
+			scoped.RemoveRuleByID(id)
+		}
+	}
 	tx.ProcessConnection(client, 0, "", 0)
 	tx.ProcessURI(r.RequestURI, r.Method, r.Header.Get("X-Fnproxy-Protocol"))
 	tx.SetServerName(r.Host)

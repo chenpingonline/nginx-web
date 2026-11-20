@@ -16,6 +16,7 @@ import (
 
 	acmemanager "github.com/chenpingonline/nginx-web/internal/acme"
 	"github.com/chenpingonline/nginx-web/internal/adminauth"
+	"github.com/chenpingonline/nginx-web/internal/crscatalog"
 	"github.com/chenpingonline/nginx-web/internal/domain"
 	"github.com/chenpingonline/nginx-web/internal/gatewayclient"
 	"github.com/chenpingonline/nginx-web/internal/metrics"
@@ -139,6 +140,8 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 	}
 
 	switch {
+	case apiPath == "/api/waf/rules" && r.Method == http.MethodGet:
+		writeJSON(w, 200, crscatalog.Rules())
 	case apiPath == "/api/waf/events" && r.Method == http.MethodGet:
 		writeJSON(w, 200, a.service.WAF.Events())
 	case apiPath == "/api/waf/instances" && r.Method == http.MethodPost, strings.HasPrefix(apiPath, "/api/waf/instances/") && r.Method == http.MethodPut:
