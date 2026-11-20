@@ -57,7 +57,7 @@ const available = computed(() =>
 );
 async function save() {
   const p = draft.value;
-  if (!p) return;
+  if (!p || saving.value) return;
   saving.value = true;
   error.value = "";
   try {
@@ -65,7 +65,7 @@ async function save() {
       method: deleting.value ? "DELETE" : p.id ? "PUT" : "POST",
       body: deleting.value ? undefined : jsonBody(p),
     });
-    dialog.value?.close();
+    draft.value = undefined;
     emit("refresh");
   } catch (e) {
     error.value = errorMessage(e);
@@ -194,9 +194,10 @@ onBeforeUnmount(() => {
       </table>
     </div>
   </section>
-  <dialog ref="dialog" class="waf-dialog" @close="draft = undefined">
-    <form v-if="draft" @submit.prevent="save">
-      <h3>
+  <dialog v-if="draft" ref="dialog" class="waf-dialog" aria-labelledby="waf-dialog-title"
+    @cancel.prevent="!saving && (draft = undefined)">
+    <form @submit.prevent="save">
+      <h3 id="waf-dialog-title">
         {{
           deleting ? "删除防护实例" : draft.id ? "编辑防护实例" : "创建防护实例"
         }}
@@ -236,7 +237,7 @@ onBeforeUnmount(() => {
       >
       <p v-if="error" role="alert">{{ error }}</p>
       <footer>
-        <button type="button" class="button" @click="dialog?.close()">
+        <button type="button" class="button" :disabled="saving" @click="draft = undefined">
           取消</button
         ><button class="button primary" :disabled="saving">
           {{ deleting ? "删除并保存草稿" : "保存草稿" }}
