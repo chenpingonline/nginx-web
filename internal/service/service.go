@@ -907,6 +907,10 @@ func (s *AppService) RotateLogs(force bool) (bool, error) {
 	return false, nil
 }
 
+func (s *AppService) RuleConfig(id string, stream bool) (string, error) {
+	return s.nginx.RuleConfig(s.store.Snapshot(), id, stream)
+}
+
 func (s *AppService) Config() (ConfigSnapshot, error) {
 	master, err := os.ReadFile(s.paths.NginxMaster)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -481,6 +481,13 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		writeResult(w, http.StatusOK, revisions, err)
 	case strings.HasPrefix(apiPath, "/api/revisions/"):
 		a.handleRevision(w, r, strings.TrimPrefix(apiPath, "/api/revisions/"))
+	case (apiPath == "/api/config-import/preview" || apiPath == "/api/config-import/save") && r.Method == http.MethodPost:
+		var input appservice.ConfigImport
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := a.service.ImportConfig(input, apiPath == "/api/config-import/save")
+		writeResult(w, http.StatusOK, result, err)
 	case apiPath == "/api/config" && r.Method == http.MethodGet:
 		config, err := a.service.Config()
 		writeResult(w, http.StatusOK, config, err)
@@ -575,6 +582,12 @@ func (a *API) handleUpstreamPool(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (a *API) handleStreamRule(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method == http.MethodGet && strings.HasSuffix(id, "/config") {
+		content, err := a.service.RuleConfig(strings.TrimSuffix(id, "/config"), true)
+		writeResult(w, http.StatusOK, map[string]string{"content": content}, err)
+		return
+	}
+
 	if strings.HasSuffix(id, "/enabled") {
 		a.handleRuleEnabled(w, r, strings.TrimSuffix(id, "/enabled"), true)
 		return
@@ -600,6 +613,12 @@ func (a *API) handleStreamRule(w http.ResponseWriter, r *http.Request, id string
 }
 
 func (a *API) handleRule(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method == http.MethodGet && strings.HasSuffix(id, "/config") {
+		content, err := a.service.RuleConfig(strings.TrimSuffix(id, "/config"), false)
+		writeResult(w, http.StatusOK, map[string]string{"content": content}, err)
+		return
+	}
+
 	if strings.HasSuffix(id, "/enabled") {
 		a.handleRuleEnabled(w, r, strings.TrimSuffix(id, "/enabled"), false)
 		return

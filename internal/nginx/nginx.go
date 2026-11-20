@@ -464,17 +464,7 @@ func (m *Manager) runCommand(ctx context.Context, args ...string) ([]byte, error
 	return cmd.CombinedOutput()
 }
 
-func (m *Manager) render(state State, confDPath string) (string, map[string]string, error) {
-	// Rules contain shared slices even when State is passed by value. Rendering
-	// resolves policies and defaults only on a private copy, never on a snapshot.
-	state = domain.CloneState(state)
-	if err := domain.ValidateRuntimePorts(state); err != nil {
-		return "", nil, err
-	}
-	domain.ApplyStateDefaults(&state)
-	if err := domain.ValidateState(state); err != nil {
-		return "", nil, err
-	}
+func resolveRenderReferences(state *State) (map[string]CertificateMeta, map[string]domain.UpstreamPool, map[string]domain.RateLimitPolicy) {
 	certs := make(map[string]CertificateMeta, len(state.Certificates))
 	for _, cert := range state.Certificates {
 		certs[cert.ID] = cert
@@ -496,6 +486,42 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 		state.Rules[index].RateLimit = policy.Settings
 		state.Rules[index].RateLimit.Enabled = true
 	}
+	return certs, pools, policies
+}
+
+// RuleConfig renders an individual draft even when it is disabled.
+func (m *Manager) RuleConfig(state State, id string, stream bool) (string, error) {
+	state = domain.CloneState(state)
+	domain.ApplyStateDefaults(&state)
+	certs, pools, _ := resolveRenderReferences(&state)
+	if stream {
+		for _, r := range state.StreamRules {
+			if r.ID == id {
+				return m.renderStreamRule(r, certs)
+			}
+		}
+	} else {
+		for _, r := range state.Rules {
+			if r.ID == id {
+				return m.renderRuleServer(r, certs, pools)
+			}
+		}
+	}
+	return "", fmt.Errorf("指定的规则不存在")
+}
+
+func (m *Manager) render(state State, confDPath string) (string, map[string]string, error) {
+	// Rules contain shared slices even when State is passed by value. Rendering
+	// resolves policies and defaults only on a private copy, never on a snapshot.
+	state = domain.CloneState(state)
+	if err := domain.ValidateRuntimePorts(state); err != nil {
+		return "", nil, err
+	}
+	domain.ApplyStateDefaults(&state)
+	if err := domain.ValidateState(state); err != nil {
+		return "", nil, err
+	}
+	certs, pools, policies := resolveRenderReferences(&state)
 
 	type group struct {
 		port  int
@@ -1243,6 +1269,9 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		fmt.Fprintf(builder, "        add_header %s %s%s;\n", header.Name, nginxDirectiveQuote(header.Value), always)
 	}
 
+	if settings.Expires != "" && (settings.BackendType == "proxy" || settings.BackendType == "static") {
+		fmt.Fprintf(builder, "        expires %s;\n", settings.Expires)
+	}
 	switch settings.BackendType {
 	case "static":
 		directive := "root"
@@ -1255,9 +1284,6 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		}
 		if settings.AutoIndex {
 			builder.WriteString("        autoindex on;\n")
-		}
-		if settings.Expires != "" {
-			fmt.Fprintf(builder, "        expires %s;\n", settings.Expires)
 		}
 		if len(settings.TryFiles) > 0 {
 			quoted := make([]string, 0, len(settings.TryFiles))
@@ -1363,6 +1389,15 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 	}
 	if rule.Authentication.Enabled && !rule.Authentication.ForwardAuthorization {
 		builder.WriteString("        proxy_set_header Authorization \"\";\n")
+	}
+	if settings.ConnectTimeoutSeconds != 0 {
+		rule.ConnectTimeoutSeconds = settings.ConnectTimeoutSeconds
+	}
+	if settings.ReadTimeoutSeconds != 0 {
+		rule.ReadTimeoutSeconds = settings.ReadTimeoutSeconds
+	}
+	if settings.SendTimeoutSeconds != 0 {
+		rule.SendTimeoutSeconds = settings.SendTimeoutSeconds
 	}
 	fmt.Fprintf(builder, "        proxy_connect_timeout %ds;\n", rule.ConnectTimeoutSeconds)
 	fmt.Fprintf(builder, "        proxy_read_timeout %ds;\n", rule.ReadTimeoutSeconds)

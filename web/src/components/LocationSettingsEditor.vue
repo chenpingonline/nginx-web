@@ -15,6 +15,17 @@ const props = defineProps<{
   ruleAuthEnabled?: boolean;
 }>();
 
+const timeoutFields = [
+  {key:"connect_timeout_seconds", label:"连接超时（秒）", max:600},
+  {key:"read_timeout_seconds", label:"读取超时（秒）", max:86400},
+  {key:"send_timeout_seconds", label:"发送超时（秒）", max:86400},
+] as const;
+const timeoutId = useId();
+const customTimeout = ref(timeoutFields.some(({key}) => Boolean(props.model[key])));
+function toggleTimeout(event: Event) {
+  customTimeout.value = (event.target as HTMLInputElement).checked;
+  if (!customTimeout.value) for (const {key} of timeoutFields) delete props.model[key];
+}
 const list = (value: string) =>
   value
     .split(/[\n,]+/)
@@ -196,7 +207,14 @@ async function directoryAction(action: "select" | "authorize") {
       <label class="checkbox-row field"><input v-model="model.autoindex" type="checkbox" /> 开启目录浏览</label>
       <div class="field"><label>首页文件</label><input class="input static-option-input" :value="model.index_files.join(', ')" @change="setList('index_files', $event)" /></div>
       <div class="field"><label>Try Files</label><input class="input static-option-input" :value="model.try_files.join(', ')" placeholder="$uri, $uri/, /index.html" @change="setList('try_files', $event)" /></div>
-      <div class="field"><label>缓存头 Expires</label><input v-model.trim="model.expires" class="input static-option-input" placeholder="7d / max / off" /></div>
+
+    </template>
+    <div v-if="['static','proxy'].includes(model.backend_type)" class="field"><label :for="timeoutId+'-expires'">缓存头 Expires</label><input :id="timeoutId+'-expires'" v-model.trim="model.expires" class="input" placeholder="7d / max / off" /></div>
+    <template v-if="model.backend_type === 'proxy'">
+      <div class="checkbox-row field full"><input :id="timeoutId" type="checkbox" :checked="customTimeout" @change="toggleTimeout" /><label :for="timeoutId">自定义路径超时</label></div>
+      <template v-if="customTimeout">
+        <div v-for="field in timeoutFields" :key="field.key" class="field timeout-field"><label :for="timeoutId+field.key">{{ field.label }}</label><input :id="timeoutId+field.key" type="number" class="input" min="1" :max="field.max" placeholder="继承规则" :value="model[field.key] || ''" @input="model[field.key] = ($event.target as HTMLInputElement).valueAsNumber || undefined" /></div>
+      </template>
     </template>
     <template v-if="model.backend_type === 'return'">
       <div class="field"><label>状态码</label><input v-model.number="model.return_code" class="input" type="number" min="200" max="599" /></div>
@@ -307,6 +325,10 @@ async function directoryAction(action: "select" | "authorize") {
 </template>
 
 <style scoped>
+.rule-modal .rule-form-grid .location-settings > .timeout-field { display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:8px; }
+.timeout-field label { color:var(--text);font-weight:600; }
+.timeout-field input { min-width:0;width:100%; }
+
 .location-settings { column-gap: 28px; }
 .rule-modal .rule-form-grid .location-settings > .checkbox-row.field { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; }
 .backend-choice-content { min-width: 0; }

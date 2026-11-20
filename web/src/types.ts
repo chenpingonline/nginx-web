@@ -118,6 +118,10 @@ export interface HeaderSetting {
   always: boolean;
 }
 export interface LocationSettings {
+  connect_timeout_seconds?: number;
+  read_timeout_seconds?: number;
+  send_timeout_seconds?: number;
+
   backend_type:
     | "proxy"
     | "static"

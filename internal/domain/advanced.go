@@ -200,6 +200,10 @@ type DAVSettings struct {
 }
 
 type LocationSettings struct {
+	ConnectTimeoutSeconds int `json:"connect_timeout_seconds,omitempty"`
+	ReadTimeoutSeconds    int `json:"read_timeout_seconds,omitempty"`
+	SendTimeoutSeconds    int `json:"send_timeout_seconds,omitempty"`
+
 	BackendType        string             `json:"backend_type"`
 	UpstreamScheme     string             `json:"upstream_scheme"`
 	UpstreamPoolID     string             `json:"upstream_pool_id,omitempty"`
@@ -593,6 +597,9 @@ func ValidateLocationSettings(settings LocationSettings, pools map[string]Upstre
 		if strings.ContainsAny(settings.ReturnTarget, "{};\r\n") {
 			return errors.New("返回目标包含不允许的字符")
 		}
+	}
+	if settings.ConnectTimeoutSeconds < 0 || settings.ConnectTimeoutSeconds > 600 || settings.ReadTimeoutSeconds < 0 || settings.ReadTimeoutSeconds > 86400 || settings.SendTimeoutSeconds < 0 || settings.SendTimeoutSeconds > 86400 {
+		return errors.New("路径超时超出允许范围")
 	}
 	if settings.Expires != "" && !regexp.MustCompile(`^(off|max|epoch|[+-]?[0-9]+[smhdwMy])$`).MatchString(settings.Expires) {
 		return errors.New("Expires 格式不正确")

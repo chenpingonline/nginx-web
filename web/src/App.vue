@@ -53,6 +53,9 @@ import BackupPage, { type BackupFile } from "./components/BackupPage.vue";
 import RuntimeSettingsForm from "./components/RuntimeSettingsForm.vue";
 import SidebarIcon from "./components/SidebarIcon.vue";
 import GatewayRoutesPage from "./components/GatewayRoutesPage.vue";
+import ConfigDialog from "./components/ConfigDialog.vue";
+import ConfigSources from "./components/ConfigSources.vue";
+import { sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -300,6 +303,30 @@ async function deleteRuleGroup(id: string): Promise<boolean> {
     busy.value = false;
   }
 }
+const sources = computed(() => sourceEntries(state.value?.custom_configs ?? []));
+const httpSources = computed(() => sources.value.filter(s=>s.file.name.endsWith(".conf")));
+const filteredSources = computed(() => selectedGroup.value && selectedGroup.value !== "all" ? [] :
+  httpSources.value.filter(s=>matchSource(s,ruleSearch.value,ruleProtocol.value,ruleEnabled.value)));
+const importing = ref(false);
+const rulePreview = ref<{content:string;name:string;draft:boolean}>();
+async function showConfig(id:string,name:string,stream=false) {
+  try {
+    const data=await request<{content:string}>(`/${stream ? "streams":"rules"}/${id}/config`);
+    rulePreview.value={...data,name,draft:!!state.value?.dirty};
+  } catch (e) {toast(errorMessage(e),"error");}
+}
+async function editSource(entry:SourceEntry) {
+  openCustomConfig(entry.file);
+  await nextTick();
+  const editor=document.querySelector<HTMLTextAreaElement>("#custom-config-content");
+  if (editor) {
+    const start=entry.error ? entry.file.content.split("\n").slice(0,entry.line-1).reduce((offset,line)=>offset+line.length+1,0) : entry.start;
+    editor.focus();editor.setSelectionRange(start,start);
+    editor.scrollTop=(entry.line-1)*(parseFloat(getComputedStyle(editor).lineHeight)||18);
+  }
+}
+function keepSource(source:string) {importing.value=false;openCustomConfig();customConfigForm.content=source;}
+async function imported() {importing.value=false;await loadCore(true);toast("导入已保存为草稿","success");}
 const filteredRules = computed(() => {
   const rules = state.value?.rules ?? [],
     term = ruleSearch.value.trim().toLowerCase();
@@ -1075,7 +1102,7 @@ onBeforeUnmount(() => {
           <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" :dirty="state.dirty" :busy="busy" @refresh="loadCore(true)" @apply="applyConfiguration" />
           <template v-else-if="page === 'streams'">
             <StreamRulesPage
-              :rules="state.stream_rules"
+              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @preview="(r)=>showConfig(r.id,r.name,true)"
               :dirty="state.dirty"
               :pending-toggles="streamToggleTargets"
               :pools="state.upstream_pools"
@@ -1116,6 +1143,7 @@ onBeforeUnmount(() => {
                 <PhArrowClockwise :size="15" aria-hidden="true" />刷新
               </button>
               <button class="button ghost" :disabled="busy" @click="groupPanel?.show()"><PhPlusCircle :size="17" aria-hidden="true" />新建分组</button>
+              <button class="button secondary" @click="importing=true">从 Nginx 配置导入</button>
               <button class="button primary" @click="openRule()">
                 <PhPlusCircle :size="17" aria-hidden="true" />添加代理规则
               </button>
@@ -1139,8 +1167,9 @@ onBeforeUnmount(() => {
                 <option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option>
               </AppSelect>
               <button class="button ghost" :disabled="!hasRuleFilters" @click="resetRuleFilters">重置筛选</button>
-              <span class="filter-count">{{ filteredRules.length }} / {{ state.rules.length }} 条</span>
+              <span class="filter-count">{{ filteredRules.length + filteredSources.length }} / {{ state.rules.length + httpSources.length }} 条</span>
             </div>
+            <ConfigSources :entries="filteredSources" @edit="editSource" />
             <RuleGroups ref="groupPanel" :groups="ruleGroups" :rules="state.rules" :certificates="state.certificates"
               :selected="selectedGroup" :busy="busy" :default-port="state.settings.default_http_port"
               :save="saveRuleGroup" :remove="deleteRuleGroup" @select="selectedGroup = $event" />
@@ -1191,6 +1220,7 @@ onBeforeUnmount(() => {
                       </td>
                       <td>
                         <div class="table-actions">
+                          <button class="button ghost small" @click="showConfig(rule.id,rule.name)">复制 Nginx 配置</button>
                           <button
                             class="button ghost small"
                             @click="openRule(rule)"
@@ -1514,6 +1544,7 @@ onBeforeUnmount(() => {
   </div>
   <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
   <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
+  <ConfigDialog v-if="importing || rulePreview" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">
       <header class="modal-header">

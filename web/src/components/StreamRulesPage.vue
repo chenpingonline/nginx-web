@@ -18,8 +18,11 @@ import type {
   StreamRuleInput,
   UpstreamPool,
 } from "../types";
+import ConfigSources from "./ConfigSources.vue";
+import {matchSource,type SourceEntry} from "../nginxConfig";
 const props = defineProps<{
   rules: StreamRule[];
+  sources: SourceEntry[];
   pendingToggles?: Record<string, boolean | undefined>;
   pools: UpstreamPool[];
   certificates: CertificateMeta[];
@@ -31,11 +34,14 @@ const emit = defineEmits<{
   remove: [rule: StreamRule];
   toggle: [rule: StreamRule, enabled: boolean];
   refresh: [];
+  preview:[rule:StreamRule];
+  source:[entry:SourceEntry];
 }>();
 const search = ref("");
 const protocolFilter = ref<"all" | "tcp" | "udp">("all");
 const enabledFilter = ref<"all" | "enabled" | "disabled">("all");
 const hasFilters = computed(() => Boolean(search.value || protocolFilter.value !== "all" || enabledFilter.value !== "all"));
+const visibleSources = computed(()=>props.sources.filter(s=>matchSource(s,search.value,protocolFilter.value,enabledFilter.value)));
 const filteredRules = computed(() => {
   const term = search.value.trim().toLowerCase();
   const poolNames = new Map(props.pools.map(pool => [pool.id, pool.name]));
@@ -168,7 +174,7 @@ watch(
       <option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option>
     </AppSelect>
     <button class="button ghost" :disabled="!hasFilters" @click="resetFilters">重置筛选</button>
-    <span class="filter-count">{{ filteredRules.length }} / {{ rules.length }} 条</span>
+    <span class="filter-count">{{ filteredRules.length + visibleSources.length }} / {{ rules.length + sources.length }} 条</span>
   </div>
   <article class="card proxy-rule-card">
     <div v-if="filteredRules.length" class="table-wrap">
@@ -218,6 +224,7 @@ watch(
             </td>
             <td>
               <div class="table-actions">
+                <button class="button ghost small" @click="emit('preview',rule)">复制 Nginx 配置</button>
                 <button class="button ghost small" @click="show(rule)">
                   编辑</button
                 ><button
@@ -232,12 +239,13 @@ watch(
         </tbody>
       </table>
     </div>
-    <div v-else class="empty-state">
+    <div v-else-if="!visibleSources.length" class="empty-state">
       <div class="empty-icon">⇆</div>
       <h3>{{ rules.length ? "没有匹配的规则" : "还没有 TCP/UDP 代理" }}</h3>
       <p>{{ rules.length ? "调整关键词、协议或启用状态后重试。" : "创建独立监听端口并转发到单节点服务或 Stream 转发服务组。" }}</p>
     </div>
   </article>
+  <ConfigSources :entries="visibleSources" @edit="emit('source',$event)" />
   <Teleport to="body">
     <div v-if="open" class="modal-backdrop" @mousedown.self="open = false">
       <section
