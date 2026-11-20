@@ -398,8 +398,11 @@ async function copyProxyAddress(value: string, label: string) {
       const input = document.createElement("textarea");
       input.value = value;
       input.style.cssText = "position:fixed;left:-9999px;top:0";
-      document.body.appendChild(input);
+      // A modal dialog makes the rest of the page inert, including textareas.
+      const container = previous?.closest("dialog[open]") ?? document.querySelector("dialog:modal") ?? document.body;
+      container.appendChild(input);
       try {
+        input.focus({ preventScroll: true });
         input.select();
         if (!document.execCommand("copy")) throw new Error("copy failed");
       } finally { input.remove(); previous?.focus(); }
