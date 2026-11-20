@@ -79,18 +79,19 @@ func (a *App) Serve() error {
 		}
 	}
 	maintenanceContext, stopMaintenance := context.WithCancel(context.Background())
+	go a.service.RunMenuWorker(maintenanceContext, "topology", a.service.MaintainTopology)
 	go a.service.MaintainLogs(maintenanceContext)
 	metricsDone := make(chan struct{})
 	go func() {
 		defer close(metricsDone)
-		a.service.MaintainMetrics(maintenanceContext)
+		a.service.RunMenuWorker(maintenanceContext, "errors", a.service.MaintainMetrics)
 	}()
 	defer func() {
 		stopMaintenance()
 		<-metricsDone // Flush the last minute before exiting.
 	}()
 	// Start certificate jobs only after owning the server socket; a second serve must not issue duplicate orders.
-	go a.service.MaintainACME(maintenanceContext)
+	go a.service.RunMenuWorker(maintenanceContext, "certificates", a.service.MaintainACME)
 
 	handler := httpapi.New(a.service, a.web)
 	if runtime.Standalone {
@@ -105,6 +106,15 @@ func (a *App) Serve() error {
 		log.Printf("独立管理入口已监听 %s", tcpListener.Addr())
 	}
 	serverErrors := make(chan error, len(servers))
+	go a.service.RunMenuWorker(maintenanceContext, "waf", func(ctx context.Context) {
+		if err := a.serveWAF(ctx); err != nil {
+			select {
+			case serverErrors <- err:
+			case <-ctx.Done():
+			}
+		}
+	})
+
 	for index, server := range servers {
 		go func(server *http.Server, listener net.Listener) {
 			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -132,6 +142,28 @@ func (a *App) Serve() error {
 		}
 	}
 	return serveErr
+}
+
+func (a *App) serveWAF(ctx context.Context) error {
+	path := a.paths.WAFSocket()
+	if err := removeStaleSocket(path); err != nil {
+		return err
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	if err := os.Chmod(path, 0660); err != nil {
+		return err
+	}
+	server := newServer(&a.service.WAF)
+	stop := context.AfterFunc(ctx, func() { server.Close() })
+	defer stop()
+	if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func newServer(handler http.Handler) *http.Server {

@@ -10,7 +10,7 @@ import (
 	"github.com/chenpingonline/nginx-web/internal/fileutil"
 )
 
-const runtimeConfigVersion = 1
+const runtimeConfigVersion = 2
 
 // Read the previous edition's applied state before checking its ports. A low
 // listener is a migration input, not evidence that the snapshot is invalid.
@@ -144,6 +144,7 @@ func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 		return result, true, fmt.Errorf("保存迁移状态失败，可重试: %w", err)
 	}
 	s.setAppliedAuthProfiles(candidate.AuthProfiles)
+	s.setAppliedMenus(candidate.Settings.HiddenMenus)
 	s.setAppliedGatewayRoutes(candidate.GatewayRoutes)
 	result.Message = candidate.LastApplyMessage
 	return result, true, nil

@@ -20,7 +20,7 @@ func (s *AppService) Initialize() error {
 	domain.ApplyStateDefaults(&state)
 	if state.LastAppliedAt == nil && len(state.Rules) == 0 &&
 		len(state.StreamRules) == 0 && len(state.Certificates) == 0 &&
-		len(state.UpstreamPools) == 0 && len(state.RateLimitPolicies) == 0 &&
+		len(state.WAFInstances) == 0 && len(state.UpstreamPools) == 0 && len(state.RateLimitPolicies) == 0 &&
 		reflect.DeepEqual(state.Settings, defaults.Settings) {
 		// Also repairs installations that already prepared the default config
 		// without recording activation. Never auto-apply an edited draft.

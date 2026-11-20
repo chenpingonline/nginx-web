@@ -73,7 +73,7 @@ func (s *AppService) DraftChanges() DraftChanges {
 	}
 	result.Status = "synced"
 	before, after := configurationMap(applied), configurationMap(draft)
-	sections := []string{"rules", "stream_rules", "gateway_routes", "rule_groups", "upstream_pools", "rate_limit_policies", "auth_profiles", "custom_configs", "settings"}
+	sections := []string{"rules", "stream_rules", "gateway_routes", "rule_groups", "upstream_pools", "rate_limit_policies", "auth_profiles", "waf_instances", "custom_configs", "settings"}
 	for _, section := range sections {
 		left, right := before[section], after[section]
 		if reflect.DeepEqual(left, right) {

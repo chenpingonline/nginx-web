@@ -34,6 +34,8 @@ type Paths struct {
 }
 
 // Monitoring stays inside this application's private runtime and data directories.
+func (p Paths) WAFSocket() string      { return filepath.Join(p.NginxRunDir, "waf.sock") }
+func (p Paths) TopologySocket() string { return filepath.Join(p.NginxRunDir, "topology.sock") }
 func (p Paths) StatusSocket() string   { return filepath.Join(p.NginxRunDir, "status.sock") }
 func (p Paths) MetricsLog() string     { return filepath.Join(p.NginxLogDir, "http-metrics.log") }
 func (p Paths) MetricsHistory() string { return filepath.Join(p.VarDir, "metrics", "history.json") }

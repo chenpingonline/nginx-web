@@ -133,7 +133,34 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		return
 	}
 
+	if menu := menuForEndpoint(apiPath); menu != "" && !a.service.MenuEnabled(menu) {
+		writeAPIError(w, http.StatusForbidden, "该菜单功能已关闭，可在全局设置中重新开启")
+		return
+	}
+
 	switch {
+	case apiPath == "/api/waf/events" && r.Method == http.MethodGet:
+		writeJSON(w, 200, a.service.WAF.Events())
+	case apiPath == "/api/waf/instances" && r.Method == http.MethodPost, strings.HasPrefix(apiPath, "/api/waf/instances/") && r.Method == http.MethodPut:
+		id := ""
+		if r.Method == http.MethodPut {
+			id = strings.TrimPrefix(apiPath, "/api/waf/instances/")
+			if !domain.ValidID(id) {
+				writeAPIError(w, 400, "无效的实例 ID")
+				return
+			}
+		}
+		var input domain.WAFInstance
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		value, err := a.service.SaveWAF(id, input)
+		writeResult(w, 200, value, err)
+	case strings.HasPrefix(apiPath, "/api/waf/instances/") && r.Method == http.MethodDelete:
+		err := a.service.DeleteWAF(strings.TrimPrefix(apiPath, "/api/waf/instances/"))
+		writeResult(w, 200, map[string]bool{"ok": err == nil}, err)
+	case apiPath == "/api/topology" && r.Method == http.MethodGet:
+		writeJSON(w, http.StatusOK, a.service.Topology())
 	case apiPath == "/api/dashboard" && r.Method == http.MethodGet:
 		minutes := 60
 		rawMinutes := r.URL.Query().Get("minutes")
@@ -147,6 +174,10 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		}
 		if !metrics.ValidRange(minutes) {
 			writeAPIError(w, http.StatusBadRequest, "时间范围必须为 15 分钟、1 小时、5 小时、1 天、7 天或 1 月（30 天）")
+			return
+		}
+		if apiPath == "/api/dashboard" && !a.service.MenuEnabled("errors") && !a.service.MenuEnabled("dashboard") {
+			writeAPIError(w, http.StatusForbidden, "总览和请求分析已关闭")
 			return
 		}
 		writeJSON(w, http.StatusOK, a.service.Dashboard(minutes, r.URL.Query().Get("rule")))

@@ -12,6 +12,7 @@ import type {
 } from "../types";
 
 const props = defineProps<{
+  analysisEnabled?: boolean;
   policies: RateLimitPolicy[];
   rules: ProxyRule[];
   busy: boolean;
@@ -98,7 +99,7 @@ function savedResult(saved?: RateLimitPolicy, error?: string) {
     <button class="button ghost" :disabled="busy" @click="emit('refresh')">
       <PhArrowClockwise :size="16" aria-hidden="true" />刷新
     </button>
-    <button class="button ghost" @click="emit('inspect')">查看请求分析</button>
+    <button v-if="analysisEnabled" class="button ghost" @click="emit('inspect')">查看请求分析</button>
     <button class="button primary" @click="show()">
       <PhPlusCircle :size="17" aria-hidden="true" />添加限流策略
     </button>

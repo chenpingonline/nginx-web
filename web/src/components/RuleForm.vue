@@ -29,6 +29,7 @@ const props = defineProps<{
   certificates: CertificateMeta[];
   upstreamPools: UpstreamPool[];
   rateLimitPolicies: RateLimitPolicy[];
+  rateLimitsEnabled?: boolean;
   authProfiles: AuthProfile[];
   busy: boolean;
 }>();
@@ -607,9 +608,9 @@ async function addLocation() {
         max="86400"
       />
     </div>
-      <div class="settings-subheading full">访问限流</div>
+      <div v-if="rateLimitsEnabled !== false" class="settings-subheading full">访问限流</div>
 
-    <div class="field full section-content entry-domain-field">
+    <div v-if="rateLimitsEnabled !== false" class="field full section-content entry-domain-field">
       <label class="field-label-with-help">限流策略<HelpHint text="同一规则下的 HTTP 反向代理路径共享按客户端 IP 统计的请求与连接额度；不同规则独立计数。静态文件路径不受此策略控制。" /></label
       ><div class="rate-limit-policy-controls">
         <AppSelect

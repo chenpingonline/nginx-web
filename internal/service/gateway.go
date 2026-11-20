@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/chenpingonline/nginx-web/internal/domain"
 	"github.com/chenpingonline/nginx-web/internal/platform"
+	"slices"
 	"strings"
 )
 
@@ -123,6 +124,9 @@ func (s *AppService) setAppliedGatewayRoutes(routes []domain.GatewayRoute) {
 func (s *AppService) GatewayRoute(path string) (domain.GatewayRoute, bool) {
 	s.authMu.RLock()
 	defer s.authMu.RUnlock()
+	if slices.Contains(s.appliedMenus, "gateway") {
+		return domain.GatewayRoute{}, false
+	}
 	for _, r := range s.appliedGatewayRoutes {
 		if r.Enabled && r.Path == path {
 			return r, true

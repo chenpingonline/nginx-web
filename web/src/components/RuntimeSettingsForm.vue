@@ -2,11 +2,12 @@
 import { minListenPort } from "../permissionMode";
 import AppSelect from "./AppSelect.vue";
 import { computed, reactive, ref, toRaw, watch } from "vue";
-import type { Settings } from "../types";
+import type { Page, Settings } from "../types";
 const appVersion = __APP_VERSION__;
 const clientCAPlaceholder = __CONTAINER__ ? "/mnt/auth/client-ca.pem" : __STANDALONE__ ? "/srv/auth/client-ca.pem" : "/vol1/.../client-ca.pem";
 const props = defineProps<{
   settings: Settings;
+  menus: { id: Page; label: string }[];
   busy: boolean;
   dirty: boolean;
 }>();
@@ -22,12 +23,30 @@ const trusted = ref(""),
 watch(
   () => props.settings,
   (value) => {
+    delete form.hidden_menus;
     Object.assign(form, structuredClone(toRaw(value)));
     trusted.value = value.real_ip.trusted_proxies.join("\n");
     gzipTypes.value = value.gzip.types.join("\n");
   },
   { immediate: true, deep: true },
 );
+const tabs = ["常用设置", "客户端真实 IP", "压缩", "动态路由变量", "Worker 与文件资源", "TLS 与日志", "菜单设置"] as const;
+const activeTab = ref<typeof tabs[number]>("常用设置");
+function moveTab(event: KeyboardEvent, index: number) {
+  const target = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+    : event.key === "ArrowRight" ? (index + 1) % tabs.length
+    : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : -1;
+  if (target < 0) return;
+  event.preventDefault();
+  activeTab.value = tabs[target]!;
+  document.getElementById("settings-tab-" + target)?.focus();
+}
+function toggleMenu(id: Page) {
+  const hidden = form.hidden_menus ?? [];
+  const next = hidden.includes(id) ? hidden.filter(item => item !== id) : [...hidden, id];
+  if (next.length) form.hidden_menus = next;
+  else delete form.hidden_menus;
+}
 function formValue(): Settings {
   return {
     ...JSON.parse(JSON.stringify(form)),
@@ -41,7 +60,10 @@ function formValue(): Settings {
     },
   };
 }
-const hasChanges = computed(() => JSON.stringify(formValue()) !== JSON.stringify(props.settings));
+function comparableSettings({ hidden_menus, ...settings }: Settings) {
+  return JSON.stringify({ ...settings, hidden_menus: [...(hidden_menus ?? [])].sort() });
+}
+const hasChanges = computed(() => comparableSettings(formValue()) !== comparableSettings(props.settings));
 function submit(event: Event) {
   const action = (event as SubmitEvent).submitter?.getAttribute("data-action");
   if (action === "test") emit("test", formValue());
@@ -60,14 +82,15 @@ function addSplit() {
 </script>
 <template>
   <form class="settings-stack" @submit.prevent="submit">
-    <article class="card">
-      <header class="card-header">
-        <div>
-          <h2>常用设置</h2>
-          <p>设置新建代理的默认端口；没有 HTTP 规则时，HTTP 端口也用于默认入口。不会修改已有规则。</p>
-        </div>
-
-      </header>
+    <article class="card settings-card">
+      <div class="rule-editor-tabs settings-tabs" role="tablist" aria-label="全局设置">
+        <button v-for="(tab, index) in tabs" :id="'settings-tab-' + index" :key="tab" type="button" role="tab"
+          :aria-selected="activeTab === tab" aria-controls="settings-panel" :tabindex="activeTab === tab ? 0 : -1"
+          @click="activeTab = tab" @keydown="moveTab($event, index)">{{ tab }}</button>
+      </div>
+      <div id="settings-panel" role="tabpanel" :aria-labelledby="'settings-tab-' + tabs.indexOf(activeTab)">
+    <section v-if="activeTab === '常用设置'">
+      <p class="settings-note">没有 HTTP 规则时，默认 HTTP 端口用于默认入口。</p>
       <div class="card-body form-grid">
         <div class="field">
           <label>新建代理默认 HTTP 端口</label
@@ -92,25 +115,18 @@ function addSplit() {
           />
         </div>
       </div>
-    </article>
-    <article class="card">
-      <header class="card-header">
-        <div>
-          <h2>客户端真实 IP</h2>
-          <p>仅信任明确配置的代理地址</p>
-        </div>
-      </header>
+    </section>
+    <section v-if="activeTab === '客户端真实 IP'">
       <div class="card-body form-grid">
         <div class="field">
           <label>状态</label
           ><label class="checkbox-row"
-            ><input v-model="form.real_ip.enabled" type="checkbox" />启用 Real
-            IP</label
+            ><input v-model="form.real_ip.enabled" type="checkbox" /><span>启用 Real IP</span></label
           ><label class="checkbox-row"
             ><input
               v-model="form.real_ip.recursive"
               type="checkbox"
-            />递归解析代理链</label
+            /><span>递归解析代理链</span></label
           >
         </div>
         <div class="field">
@@ -130,26 +146,17 @@ function addSplit() {
           ></textarea>
         </div>
       </div>
-    </article>
-    <article class="card">
-      <header class="card-header">
-        <div>
-          <h2>压缩</h2>
-          <p>Gzip、预压缩文件和兼容客户端解压</p>
-        </div>
-      </header>
+    </section>
+    <section v-if="activeTab === '压缩'">
       <div class="card-body form-grid">
         <div class="field">
           <label>开关</label
           ><label class="checkbox-row"
-            ><input v-model="form.gzip.enabled" type="checkbox" />启用
-            Gzip</label
+            ><input v-model="form.gzip.enabled" type="checkbox" /><span>启用 Gzip</span></label
           ><label class="checkbox-row"
-            ><input v-model="form.gzip.static" type="checkbox" />优先使用 .gz
-            文件</label
+            ><input v-model="form.gzip.static" type="checkbox" /><span>优先使用 .gz 文件</span></label
           ><label class="checkbox-row"
-            ><input v-model="form.gzip.gunzip" type="checkbox" />启用
-            Gunzip</label
+            ><input v-model="form.gzip.gunzip" type="checkbox" /><span>启用 Gunzip</span></label
           >
         </div>
         <div class="field">
@@ -174,17 +181,13 @@ function addSplit() {
           ><textarea v-model="gzipTypes" class="textarea"></textarea>
         </div>
       </div>
-    </article>
-    <details class="card settings-advanced">
-      <summary class="settings-advanced-summary">高级选项<span>动态路由变量、性能调优、TLS 与日志</span></summary>
-      <div class="card-body settings-stack">
-    <article class="card">
-      <header class="card-header"><div><h2>动态路由变量</h2><p>用 Map、Geo 和 Split Clients 生成可在 Header、重写和转发服务配置中引用的变量</p></div></header>
+    </section>
+    <section v-if="activeTab === '动态路由变量'">
       <div class="card-body settings-stack">
         <details class="advanced-box"><summary>Map（{{ form.routing.maps.length }}）</summary><div class="form-grid compact-grid">
           <div v-for="(item, index) in form.routing.maps" :key="`map-${index}`" class="routing-editor full">
             <input v-model.trim="item.name" class="input" placeholder="名称" /><input v-model.trim="item.source" class="input" placeholder="$host" /><input v-model.trim="item.variable" class="input" placeholder="$backend" /><input v-model="item.default" class="input" placeholder="默认值" />
-            <label class="checkbox-row"><input v-model="item.hostnames" type="checkbox" />域名匹配</label><button type="button" class="button danger compact" @click="form.routing.maps.splice(index, 1)">删除</button>
+            <label class="checkbox-row"><input v-model="item.hostnames" type="checkbox" /><span>域名匹配</span></label><button type="button" class="button danger compact" @click="form.routing.maps.splice(index, 1)">删除</button>
             <div v-for="(entry, entryIndex) in item.entries" :key="entryIndex" class="inline-editor routing-entry"><input v-model="entry.key" class="input" placeholder="匹配值" /><input v-model="entry.value" class="input" placeholder="输出值" /><button type="button" class="button danger compact" @click="item.entries.splice(entryIndex, 1)">−</button></div>
             <button type="button" class="button ghost compact fit" @click="item.entries.push({ key: '', value: '' })">添加条目</button>
           </div><button type="button" class="button ghost compact fit" @click="addMap">添加 Map</button>
@@ -198,14 +201,8 @@ function addSplit() {
           <button type="button" class="button ghost compact fit" @click="addSplit">添加 Split</button>
         </div></details>
       </div>
-    </article>
-    <article class="card">
-      <header class="card-header">
-        <div>
-          <h2>Worker 与文件资源</h2>
-          <p>自动适配当前运行环境的文件句柄上限，避免 worker_connections 警告</p>
-        </div>
-      </header>
+    </section>
+    <section v-if="activeTab === 'Worker 与文件资源'">
       <div class="card-body form-grid">
         <div class="field">
           <label>Worker 数量</label
@@ -243,23 +240,16 @@ function addSplit() {
             ><input
               v-model="form.multi_accept"
               type="checkbox"
-            />一次接受多个连接</label
+            /><span>一次接受多个连接</span></label
           ><label class="checkbox-row"
-            ><input v-model="form.file_aio" type="checkbox" />启用文件
-            AIO</label
+            ><input v-model="form.file_aio" type="checkbox" /><span>启用文件 AIO</span></label
           >
         </div>
         <div class="field"><label>线程池线程数</label><input v-model.number="form.thread_pool_threads" class="input" type="number" min="0" max="1024" /><span class="field-help">0 表示关闭；启用后文件 I/O 使用线程池。</span></div>
         <div class="field"><label>线程池队列上限</label><input v-model.number="form.thread_pool_queue" class="input" type="number" min="1" max="1048576" /></div>
       </div>
-    </article>
-    <article class="card">
-      <header class="card-header">
-        <div>
-          <h2>TLS 与日志</h2>
-          <p>全局安全协议、会话缓存和日志缓冲</p>
-        </div>
-      </header>
+    </section>
+    <section v-if="activeTab === 'TLS 与日志'">
       <div class="card-body form-grid">
         <div class="field">
           <label>TLS 协议</label
@@ -268,13 +258,13 @@ function addSplit() {
               v-model="form.tls.protocols"
               type="checkbox"
               value="TLSv1.2"
-            />TLS 1.2</label
+            /><span>TLS 1.2</span></label
           ><label class="checkbox-row"
             ><input
               v-model="form.tls.protocols"
               type="checkbox"
               value="TLSv1.3"
-            />TLS 1.3</label
+            /><span>TLS 1.3</span></label
           >
         </div>
         <div class="field">
@@ -298,7 +288,7 @@ function addSplit() {
             min="1"
             max="1440"
           />
-          <label class="checkbox-row"><input v-model="form.tls.ocsp_stapling" type="checkbox" />启用 OCSP Stapling</label>
+          <label class="checkbox-row"><input v-model="form.tls.ocsp_stapling" type="checkbox" /><span>启用 OCSP Stapling</span></label>
         </div>
         <div class="field">
           <label>客户端证书校验</label><AppSelect v-model="form.tls.client_verify" class="select"><option value="off">关闭</option><option value="on">强制</option><option value="optional">可选并校验 CA</option><option value="optional_no_ca">可选且不校验 CA</option></AppSelect>
@@ -310,7 +300,7 @@ function addSplit() {
             ><input
               v-model="form.logging.access_enabled"
               type="checkbox"
-            />启用访问日志</label
+            /><span>启用访问日志</span></label
           ><label>缓冲（KB）</label
           ><input
             v-model.number="form.logging.access_buffer_kb"
@@ -351,9 +341,19 @@ function addSplit() {
         <div class="field"><label>日志轮转大小（MB）</label><input v-model.number="form.logging.rotate_size_mb" class="input" type="number" min="1" max="10240" /></div>
         <div class="field"><label>轮转文件保留数</label><input v-model.number="form.logging.rotate_keep" class="input" type="number" min="1" max="100" /></div>
       </div>
-    </article>
+    </section>
+      <section v-if="activeTab === '菜单设置'">
+        <p class="settings-note">应用后，未勾选的菜单将隐藏，对应的代理转发、采集或自动续期也会停用。已有配置会保留。</p>
+        <div class="card-body menu-options">
+          <div v-for="menu in menus" :key="menu.id" class="menu-option">
+            <input :id="'menu-' + menu.id" type="checkbox" :checked="!form.hidden_menus?.includes(menu.id)"
+              :disabled="menu.id === 'settings'" @change="toggleMenu(menu.id)" />
+            <label :for="'menu-' + menu.id">{{ menu.label }}</label>
+          </div>
+        </div>
+      </section>
       </div>
-    </details>
+    </article>
     <div class="settings-actions-shell"><div class="sticky-actions">
       <div class="settings-app-info">
         <a
@@ -400,10 +400,23 @@ function addSplit() {
 </template>
 
 <style scoped>
-.settings-advanced-summary { padding: 18px 20px; cursor: pointer; font-weight: 600; }
-.settings-advanced-summary span { display: block; margin-top: 6px; color: var(--text-muted); font-size: 13px; font-weight: 400; }
-.settings-advanced[open] > summary { border-bottom: 1px solid var(--line); }
-
+.settings-card { min-width: 0; }
+.settings-tabs { justify-content: flex-start; padding-inline: 16px; border-radius: var(--radius) var(--radius) 0 0; }
+.settings-card .field > label:not(.checkbox-row) { justify-content: flex-end; text-align: right; color: var(--text); font-weight: 600; }
+.settings-card .checkbox-row { pointer-events: none; }
+.settings-card .checkbox-row > * { pointer-events: auto; cursor: pointer; }
+@media (max-width: 760px) {
+  .settings-actions-shell { position: static; padding-bottom: 0; }
+  .settings-card .field { display: grid; grid-template-columns: min(40%, 145px) minmax(0, 1fr); align-items: center; gap: 6px 8px; }
+  .settings-card .field > label:not(.checkbox-row) { grid-column: 1; }
+  .settings-card .field > :not(label), .settings-card .field > .checkbox-row { grid-column: 2; min-width: 0; }
+}
+.settings-note { margin: 16px 17px 0; color: var(--text-muted); }
+.menu-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 36px; }
+.menu-option { display: flex; align-items: center; gap: 8px; }
+.menu-option input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.menu-option label { font-weight: 600; cursor: pointer; }
+@media (max-width: 600px) { .menu-options { grid-template-columns: 1fr; } }
 /* Override the legacy global link colors only for the settings repository mark. */
 .settings-stack .app-update-github {
   color: var(--text);

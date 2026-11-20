@@ -25,6 +25,7 @@ import (
 	"github.com/chenpingonline/nginx-web/internal/pathsecurity"
 	"github.com/chenpingonline/nginx-web/internal/platform"
 	storepkg "github.com/chenpingonline/nginx-web/internal/store"
+	"github.com/chenpingonline/nginx-web/internal/waf"
 )
 
 type Paths = platform.Paths
@@ -42,6 +43,7 @@ type NginxStatus = domain.NginxStatus
 type ApplyResult = domain.ApplyResult
 
 type AppService struct {
+	WAF                  waf.Inspector
 	paths                Paths
 	store                *Store
 	nginx                *NginxManager
@@ -52,9 +54,12 @@ type AppService struct {
 	authMu               sync.RWMutex
 	appliedAuthProfiles  []domain.AuthProfile
 	appliedGatewayRoutes []domain.GatewayRoute
+	appliedMenus         []string
+	menuChanged          chan struct{}
 }
 
 type Overview struct {
+	HiddenMenus      []string    `json:"hidden_menus,omitempty"`
 	AppName          string      `json:"app_name"`
 	AppVersion       string      `json:"app_version"`
 	NginxVersion     string      `json:"nginx_version"`
@@ -130,6 +135,7 @@ func (s *AppService) Overview() Overview {
 	state := s.State()
 	_, appliedKnown := s.appliedState(state)
 	return Overview{
+		HiddenMenus:      s.hiddenMenus(),
 		AppName:          domain.AppName,
 		AppVersion:       domain.AppVersion,
 		NginxVersion:     domain.NginxVersion,
@@ -424,6 +430,15 @@ func (s *AppService) DeleteRule(id string) error {
 			if state.Rules[index].ID != id {
 				continue
 			}
+			for i := range state.WAFInstances {
+				p := &state.WAFInstances[i]
+				for j, site := range p.Sites {
+					if site == id {
+						p.Sites = append(p.Sites[:j], p.Sites[j+1:]...)
+						break
+					}
+				}
+			}
 			state.Rules = append(state.Rules[:index], state.Rules[index+1:]...)
 			state.Dirty = true
 			return nil
@@ -646,6 +661,7 @@ func (s *AppService) recordAppliedState(state State, result ApplyResult, summary
 		persistErr = fileutil.WriteFileAtomic(s.paths.AppliedState(), data, 0600)
 	}
 	s.setAppliedAuthProfiles(applied.AuthProfiles)
+	s.setAppliedMenus(applied.Settings.HiddenMenus)
 	s.setAppliedGatewayRoutes(applied.GatewayRoutes)
 	if err := s.updateState(func(current *State) error {
 		current.LastAppliedAt = &now
@@ -733,6 +749,9 @@ func (s *AppService) NginxTest() (ApplyResult, error) {
 }
 
 func (s *AppService) saveRevision(state State, summary string) error {
+	if !state.Settings.MenuEnabled("revisions") {
+		return nil
+	}
 	revision := Revision{
 		ID:           time.Now().UTC().Format("20060102T150405Z") + "-" + domain.RandomID()[:8],
 		CreatedAt:    time.Now().UTC(),

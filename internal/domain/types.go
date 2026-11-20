@@ -25,6 +25,7 @@ var (
 )
 
 type Settings struct {
+	HiddenMenus        []string               `json:"hidden_menus,omitempty"`
 	DefaultHTTPPort    int                    `json:"default_http_port"`
 	DefaultHTTPSPort   int                    `json:"default_https_port"`
 	RevisionLimit      int                    `json:"revision_limit"`
@@ -91,6 +92,7 @@ type CertificateMeta struct {
 }
 
 type State struct {
+	WAFInstances         []WAFInstance     `json:"waf_instances,omitempty"`
 	GatewayRoutes        []GatewayRoute    `json:"gateway_routes"`
 	RuntimeConfigVersion int               `json:"runtime_config_version,omitempty"`
 	RuntimeMinListenPort int               `json:"runtime_min_listen_port,omitempty"`
@@ -347,6 +349,12 @@ func ValidateRule(rule ProxyRule, certs map[string]CertificateMeta, pools ...map
 }
 
 func ValidateState(state State) error {
+	if err := validateWAF(state); err != nil {
+		return err
+	}
+	if err := validateMenus(state); err != nil {
+		return err
+	}
 	if err := ValidateGatewayRoutes(state.GatewayRoutes); err != nil {
 		return err
 	}
@@ -567,6 +575,7 @@ func validateHostName(value string, allowWildcard bool) error {
 }
 
 func EnabledRuleCount(state State) int {
+	state = MenuRuntimeState(state)
 	count := 0
 	for _, rule := range state.Rules {
 		if rule.Enabled {
@@ -582,6 +591,7 @@ func EnabledRuleCount(state State) int {
 }
 
 func ActivePorts(state State) []int {
+	state = MenuRuntimeState(state)
 	set := make(map[int]struct{})
 	for _, rule := range state.Rules {
 		if rule.Enabled {
@@ -593,7 +603,7 @@ func ActivePorts(state State) []int {
 			set[rule.ListenPort] = struct{}{}
 		}
 	}
-	if len(set) == 0 && state.Settings.DefaultHTTPPort >= MinListenPort {
+	if state.Settings.MenuEnabled("rules") && len(set) == 0 && state.Settings.DefaultHTTPPort >= MinListenPort {
 		set[state.Settings.DefaultHTTPPort] = struct{}{}
 	}
 	ports := make([]int, 0, len(set))

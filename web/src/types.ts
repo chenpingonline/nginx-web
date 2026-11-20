@@ -1,4 +1,6 @@
 export type Page =
+  | "topology"
+  | "waf"
   | "dashboard"
   | "errors"
   | "backup"
@@ -63,6 +65,7 @@ export interface DynamicRoutingSettings {
   splits: SplitDefinition[];
 }
 export interface Settings {
+  hidden_menus?: Page[];
   default_http_port: number;
   default_https_port: number;
   revision_limit: number;
@@ -326,7 +329,9 @@ export interface StreamRule extends StreamRuleInput {
   updated_at: string;
 }
 export interface GatewayRoute { id: string; name: string; path: string; target: string; enabled: boolean; compatibility?: "" | "subpath" | "ikuai-v4"; tls_fingerprint?: string; tls_trust_target?: string; }
+export interface WAFInstance {id:string;name:string;mode:"detect"|"block";sites:string[]}
 export interface State {
+ waf_instances?:WAFInstance[];
   gateway_routes?: GatewayRoute[];
   rule_groups?: RuleGroup[];
   draft_revision_id?: string;
@@ -365,6 +370,7 @@ export interface NginxStatus {
   last_error?: string;
 }
 export interface Overview {
+  hidden_menus?: Page[];
   app_version: string;
   nginx_version: string;
   nginx: NginxStatus;

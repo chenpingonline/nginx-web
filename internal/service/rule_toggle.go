@@ -138,6 +138,7 @@ func (s *AppService) ToggleRule(id string, stream, enabled bool) (ApplyResult, e
 		return ApplyResult{}, err
 	}
 	s.setAppliedAuthProfiles(candidate.AuthProfiles)
+	s.setAppliedMenus(candidate.Settings.HiddenMenus)
 	s.setAppliedGatewayRoutes(candidate.GatewayRoutes)
 	if err := s.saveRevision(candidate, result.Message); err != nil {
 		result.Message += "；配置历史保存失败: " + err.Error()

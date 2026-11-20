@@ -7,7 +7,7 @@ import {
   PhWarning, PhGlobe, PhShareNetwork, PhCaretLeft, PhCaretRight,
 } from "@phosphor-icons/vue";
 import { useDashboardData } from "../composables/useDashboardData";
-import type { CertificateMeta, DashboardData, DashboardRule, MetricCounts, Overview } from "../types";
+import type { CertificateMeta, DashboardData, DashboardRule, MetricCounts, Page, Overview } from "../types";
 import type { TrafficSeries } from "./traffic-chart";
 import TrafficChart from "./TrafficChart.vue";
 import { trafficRanges, trafficPeriod } from "./traffic-ranges";
@@ -28,6 +28,7 @@ const { data, error, fetching, stats, rules, load } = useDashboardData({
   minutes, selected, updatedAt: () => props.updatedAt,
   onOverview: (value) => emit("overview", value),
 });
+const menuEnabled = (id: Page) => !props.overview.hidden_menus?.includes(id);
 const search = ref(""), protocol = ref("all"), configFilter = ref("all");
 const sort = ref("errors"), page = ref(1), pageSize = ref(5);
 const overview = computed(() => data.value?.overview ?? props.overview);
@@ -111,7 +112,7 @@ function certificateState(cert: CertificateMeta) {
 }
 const issue = computed(() => {
   if (!overview.value.applied_known && overview.value.last_applied_at) return "无法确认上次生效的配置，暂时不能判断草稿是否与运行配置一致。";
-  if (!data.value) return "";
+  if (!data.value || !menuEnabled("errors")) return "";
   if (!data.value.monitoring_ready) return "新版统计尚未启用，保存并应用配置后开始采集；当前草稿也会一并应用。";
   if (!overview.value.nginx.running) return "Nginx 已停止，当前保留历史记录。";
   if (!data.value.metrics.available) return "暂时无法读取运行指标，正在重试；历史记录仍可查看。";
@@ -141,8 +142,8 @@ const issue = computed(() => {
         <div><dt>运行时长</dt><dd>{{ uptime(overview.nginx.uptime_seconds) }}</dd></div>
         <div><dt>进程 ID</dt><dd>{{ overview.nginx.running ? num(overview.nginx.pid, 0).replaceAll(',', '') : "—" }}</dd></div>
         <div><dt>工作进程</dt><dd>{{ num(overview.nginx.worker_processes, 0) }}</dd></div>
-        <div><dt>活动连接</dt><dd>{{ error ? "—" : num(stats?.connections, 0) }}</dd></div>
-        <div><dt>请求/秒</dt><dd>{{ error || selected ? "—" : num(stats?.rps, 2) }}</dd></div>
+        <div v-if="menuEnabled('errors')"><dt>活动连接</dt><dd>{{ error ? "—" : num(stats?.connections, 0) }}</dd></div>
+        <div v-if="menuEnabled('errors')"><dt>请求/秒</dt><dd>{{ error || selected ? "—" : num(stats?.rps, 2) }}</dd></div>
       </dl>
     </section>
 
@@ -150,14 +151,14 @@ const issue = computed(() => {
       <PhWarningCircle :size="18" /><span>刷新失败：{{ error }}。{{ data ? "下面保留上次数据。" : "" }}</span><button class="button small" @click="load">重试</button>
     </div>
     <div v-if="overview.last_apply_error" class="notice danger dashboard-notice" role="alert">
-      <PhWarningCircle :size="18" /><span>最近应用失败：{{ overview.last_apply_error }}</span><button class="button secondary small" @click="emit('navigate', 'config')">查看配置</button>
+      <PhWarningCircle :size="18" /><span>最近应用失败：{{ overview.last_apply_error }}</span><button v-if="menuEnabled('config')" class="button secondary small" @click="emit('navigate', 'config')">查看配置</button>
     </div>
     <div v-if="issue || overview.dirty" class="notice warning dashboard-notice">
       <PhWarningCircle :size="18" /><span>{{ issue || "当前草稿尚未应用，正在转发的服务仍使用上次生效配置。" }}</span>
-      <button v-if="overview.dirty" class="button secondary small" @click="emit('navigate', 'revisions')">查看详情<PhArrowRight :size="15" aria-hidden="true" /></button>
+      <button v-if="overview.dirty && menuEnabled('revisions')" class="button secondary small" @click="emit('navigate', 'revisions')">查看详情<PhArrowRight :size="15" aria-hidden="true" /></button>
     </div>
 
-    <section class="card traffic-card" :aria-busy="fetching">
+    <section v-if="menuEnabled('errors')" class="card traffic-card" :aria-busy="fetching">
       <header class="card-header">
         <h2>实时流量</h2>
         <div class="traffic-controls">
@@ -228,7 +229,7 @@ const issue = computed(() => {
               <td><div class="proxy-entry"><span class="proxy-entry-url">{{ rule.target_url || rule.target }}</span><button v-if="rule.target_url || rule.protocol === 'TCP' || rule.protocol === 'UDP'" type="button" class="icon-button proxy-entry-action" aria-label="复制转发服务地址" title="复制转发服务地址" @click="emit('copy', rule.target_url || rule.target, '转发服务地址')"><PhCopy :size="16" /></button></div></td>
               <td><span class="rule-status" :class="rule.config_state" :title="rule.config_state === 'pending_delete' ? '草稿已删除，仍在上次生效配置中' : '配置状态不代表服务健康'"><i></i><span>{{ configNames[rule.config_state] }}</span></span></td>
               <td :title="`${period}平均完成请求速率`">{{ num(averageRate(rule), 2) }} <small v-if="averageRate(rule) != null">req/s</small></td>
-              <td><button v-if="rule.protocol === 'HTTP' || rule.protocol === 'HTTPS'" class="error-rate-link" :class="{ 'error-count': (totalErrors(rule.counts) ?? 0) > 0 }" :aria-label="`查看 ${rule.name} 的错误率详情`" @click="showErrors(rule.id)">{{ errorRate(rule.counts) == null ? "—" : `${num(errorRate(rule.counts), 2)}%` }}<PhArrowRight :size="13" /></button><span v-else>—</span></td>
+              <td><button v-if="menuEnabled('errors') && (rule.protocol === 'HTTP' || rule.protocol === 'HTTPS')" class="error-rate-link" :class="{ 'error-count': (totalErrors(rule.counts) ?? 0) > 0 }" :aria-label="`查看 ${rule.name} 的错误率详情`" @click="showErrors(rule.id)">{{ errorRate(rule.counts) == null ? "—" : `${num(errorRate(rule.counts), 2)}%` }}<PhArrowRight :size="13" /></button><span v-else>—</span></td>
             </tr>
           </tbody>
         </table>
@@ -245,7 +246,7 @@ const issue = computed(() => {
       </footer>
     </section>
 
-    <section class="card certificate-attention" :class="{ 'has-alert': data?.certificates.length }">
+    <section v-if="menuEnabled('certificates')" class="card certificate-attention" :class="{ 'has-alert': data?.certificates.length }">
       <header class="certificate-heading">
         <h2>证书状态</h2>
         <button class="button secondary small" @click="emit('navigate', 'certificates')">查看证书<PhArrowRight :size="17" /></button>

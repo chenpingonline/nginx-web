@@ -136,6 +136,8 @@ type Result struct {
 }
 
 type Collector struct {
+	topology             [8192]TopologyHit
+	topologyNext         int
 	mu                   sync.Mutex
 	data                 checkpoint
 	logPath, historyPath string

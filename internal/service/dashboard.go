@@ -119,32 +119,42 @@ func (s *AppService) Dashboard(minutes int, selected string) Dashboard {
 	now := time.Now()
 	state := s.State()
 	applied, known := s.appliedState(state)
-	ready, logging := s.monitoringConfig()
-	stats := s.metrics.Snapshot(now, minutes, selected)
-	d := Dashboard{Overview: s.Overview(), Metrics: stats, MonitoringReady: ready, AccessLogging: logging, AppliedKnown: known, AppliedPorts: []int{}, Rules: []DashboardRule{}, Certificates: []CertificateAlert{}}
-	d.StreamMetrics = s.streamMetrics.Snapshot(now, minutes, selected)
-	activeRules := state.StreamRules
-	if known {
-		activeRules = applied.StreamRules
+	applied = domain.MenuRuntimeState(applied)
+	if !s.MenuEnabled("rules") {
+		state.Rules = nil
 	}
-	if d.Overview.Nginx.Running {
-		d.StreamMetrics.ActiveConnections = countActiveTCPConnections(activeRules, selected, "/proc/net/tcp", "/proc/net/tcp6")
-	} else {
-		zero := uint64(0)
-		d.StreamMetrics.ActiveConnections = &zero
+	if !s.MenuEnabled("streams") {
+		state.StreamRules = nil
 	}
-	master, _ := os.ReadFile(s.paths.NginxMaster)
-	d.StreamMetrics.Ready = strings.Contains(string(master), "# fnproxy_stream_metrics_v1")
-	files, _ := filepath.Glob(filepath.Join(s.paths.NginxConfD, "*.stream"))
-	for _, path := range files {
-		content, _ := os.ReadFile(path)
-		for _, line := range strings.Split(string(content), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) >= 3 && fields[0] == "access_log" && strings.HasPrefix(fields[2], "fnproxy_stream_metrics_") {
-				d.StreamMetrics.LoggingRules = append(d.StreamMetrics.LoggingRules, strings.TrimPrefix(fields[2], "fnproxy_stream_metrics_"))
+	d := Dashboard{Overview: s.Overview(), AppliedKnown: known, AppliedPorts: []int{}, Rules: []DashboardRule{}, Certificates: []CertificateAlert{}}
+	if s.MenuEnabled("errors") {
+		d.MonitoringReady, d.AccessLogging = s.monitoringConfig()
+		d.Metrics = s.metrics.Snapshot(now, minutes, selected)
+		d.StreamMetrics = s.streamMetrics.Snapshot(now, minutes, selected)
+		activeRules := state.StreamRules
+		if known {
+			activeRules = applied.StreamRules
+		}
+		if d.Overview.Nginx.Running {
+			d.StreamMetrics.ActiveConnections = countActiveTCPConnections(activeRules, selected, "/proc/net/tcp", "/proc/net/tcp6")
+		} else {
+			zero := uint64(0)
+			d.StreamMetrics.ActiveConnections = &zero
+		}
+		master, _ := os.ReadFile(s.paths.NginxMaster)
+		d.StreamMetrics.Ready = strings.Contains(string(master), "# fnproxy_stream_metrics_v1")
+		files, _ := filepath.Glob(filepath.Join(s.paths.NginxConfD, "*.stream"))
+		for _, path := range files {
+			content, _ := os.ReadFile(path)
+			for _, line := range strings.Split(string(content), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) >= 3 && fields[0] == "access_log" && strings.HasPrefix(fields[2], "fnproxy_stream_metrics_") {
+					d.StreamMetrics.LoggingRules = append(d.StreamMetrics.LoggingRules, strings.TrimPrefix(fields[2], "fnproxy_stream_metrics_"))
+				}
 			}
 		}
 	}
+	stats := d.Metrics
 	if known {
 		d.AppliedCount = domain.EnabledRuleCount(applied)
 		d.AppliedPorts = domain.ActivePorts(applied)

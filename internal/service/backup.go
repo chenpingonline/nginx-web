@@ -190,6 +190,7 @@ func (s *AppService) RestoreBackup(backup Backup) (State, error) {
 		state.GatewayRoutes = next.GatewayRoutes
 		state.UpstreamPools = next.UpstreamPools
 		state.RateLimitPolicies = next.RateLimitPolicies
+		state.WAFInstances = next.WAFInstances
 		state.Certificates = append(state.Certificates, added...)
 		state.Dirty = true
 		state.DraftRevisionID = ""

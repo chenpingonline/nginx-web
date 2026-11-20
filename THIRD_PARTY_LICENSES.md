@@ -90,3 +90,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Web application firewall
+
+The Go management service embeds [OWASP Coraza](https://github.com/corazawaf/coraza) and the [OWASP Core Rule Set](https://github.com/coreruleset/coreruleset) through [coraza-coreruleset](https://github.com/corazawaf/coraza-coreruleset). These projects are licensed under the Apache License, Version 2.0.

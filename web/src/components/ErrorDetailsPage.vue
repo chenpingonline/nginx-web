@@ -230,7 +230,7 @@ function statusClass(status: number | string) {
         <tbody><tr v-for="rule in visibleRules" :key="rule.id">
           <td><button class="rule-name" @click="selected = rule.id">{{ rule.name }}</button><div class="rule-entry" :title="rule.entry">{{ rule.entry }}</div></td><td>{{ number(rule.counts?.requests) }}</td><td>{{ bytes(rule.counts?.bytes) }}</td><td>{{ duration(averageRequest(rule.counts)) }}</td>
           <td :class="{ 'error-count': (totalErrors(rule.counts) ?? 0) > 0 }">{{ number(totalErrors(rule.counts)) }} / {{ percent(errorRate(rule.counts)) }}</td><td>{{ date(rule.counts?.last_seen) }}</td>
-          <td><button class="button ghost small" :disabled="busy || rule.config_state === 'pending_delete'" @click="emit('edit', rule.id)">管理规则<PhArrowRight :size="13" /></button></td>
+          <td><button v-if="!overview.hidden_menus?.includes('rules')" class="button ghost small" :disabled="busy || rule.config_state === 'pending_delete'" @click="emit('edit', rule.id)">管理规则<PhArrowRight :size="13" /></button></td>
         </tr></tbody>
       </table></div>
       <div v-else-if="fetching && !stats" class="empty-state"><h3>正在读取请求统计…</h3><p>获取所选范围内的规则数据</p></div>

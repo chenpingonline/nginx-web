@@ -493,17 +493,18 @@ func resolveRenderReferences(state *State) (map[string]CertificateMeta, map[stri
 func (m *Manager) RuleConfig(state State, id string, stream bool) (string, error) {
 	state = domain.CloneState(state)
 	domain.ApplyStateDefaults(&state)
+	state = domain.MenuRuntimeState(state)
 	certs, pools, _ := resolveRenderReferences(&state)
 	if stream {
 		for _, r := range state.StreamRules {
 			if r.ID == id {
-				return m.renderStreamRule(r, certs)
+				return m.renderStreamRule(r, certs, state.Settings)
 			}
 		}
 	} else {
 		for _, r := range state.Rules {
 			if r.ID == id {
-				return m.renderRuleServer(r, certs, pools)
+				return m.renderRuleServer(r, certs, pools, state.WAFInstances...)
 			}
 		}
 	}
@@ -521,6 +522,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 	if err := domain.ValidateState(state); err != nil {
 		return "", nil, err
 	}
+	state = domain.MenuRuntimeState(state)
 	certs, pools, policies := resolveRenderReferences(&state)
 
 	type group struct {
@@ -540,7 +542,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 		}
 		item.rules = append(item.rules, rule)
 	}
-	if len(groupsByPort) == 0 && state.Settings.DefaultHTTPPort >= domain.MinListenPort {
+	if state.Settings.MenuEnabled("rules") && len(groupsByPort) == 0 && state.Settings.DefaultHTTPPort >= domain.MinListenPort {
 		groupsByPort[state.Settings.DefaultHTTPPort] = &group{port: state.Settings.DefaultHTTPPort, tls: false}
 	}
 
@@ -551,7 +553,8 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 	sort.Ints(ports)
 
 	files := make(map[string]string)
-	files["000-monitoring.conf"] = fmt.Sprintf(`server {
+	if state.Settings.MenuEnabled("errors") {
+		files["000-monitoring.conf"] = fmt.Sprintf(`server {
     listen %s;
     server_name localhost;
     access_log off;
@@ -559,6 +562,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
     location / { return 404; }
 }
 `, nginxQuote("unix:"+m.paths.StatusSocket()))
+	}
 	if prelude := renderHTTPPrelude(state, m.paths.NginxCacheDir); prelude != "" {
 		files["001-runtime-and-upstreams.conf"] = prelude
 	}
@@ -604,7 +608,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 		}
 
 		for index, rule := range item.rules {
-			content, err := m.renderRuleServer(rule, certs, pools)
+			content, err := m.renderRuleServer(rule, certs, pools, state.WAFInstances...)
 			if err != nil {
 				return "", nil, err
 			}
@@ -618,7 +622,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 		if !rule.Enabled {
 			continue
 		}
-		content, err := m.renderStreamRule(rule, certs)
+		content, err := m.renderStreamRule(rule, certs, state.Settings)
 		if err != nil {
 			return "", nil, err
 		}
@@ -639,11 +643,22 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 	if state.Settings.WorkerRlimitNofile > 0 {
 		workerRlimit = fmt.Sprintf("worker_rlimit_nofile %d;\n", state.Settings.WorkerRlimitNofile)
 	}
-	accessLog := "access_log off;"
+	var accessLogs []string
 	if state.Settings.Logging.AccessEnabled {
-		accessLog = fmt.Sprintf("access_log %s fnproxy buffer=%dk flush=%ds;", nginxQuote(m.paths.NginxAccessLog), state.Settings.Logging.AccessBufferKB, state.Settings.Logging.AccessFlushSec)
-		accessLog += fmt.Sprintf("\n    access_log %s fnproxy_metrics buffer=32k flush=1s;", nginxQuote(m.paths.MetricsLog()))
+		if state.Settings.MenuEnabled("logs") {
+			accessLogs = append(accessLogs, fmt.Sprintf("access_log %s fnproxy buffer=%dk flush=%ds;", nginxQuote(m.paths.NginxAccessLog), state.Settings.Logging.AccessBufferKB, state.Settings.Logging.AccessFlushSec))
+		}
+		if state.Settings.MenuEnabled("topology") {
+			accessLogs = append(accessLogs, fmt.Sprintf("access_log %s fnproxy_topology;", nginxQuote("syslog:server=unix:"+m.paths.TopologySocket()+",nohostname")))
+		}
+		if state.Settings.MenuEnabled("errors") {
+			accessLogs = append(accessLogs, fmt.Sprintf("access_log %s fnproxy_metrics buffer=32k flush=1s;", nginxQuote(m.paths.MetricsLog())))
+		}
 	}
+	if len(accessLogs) == 0 {
+		accessLogs = append(accessLogs, "access_log off;")
+	}
+	accessLog := strings.Join(accessLogs, "\n    ")
 	logFormat := `log_format fnproxy '$remote_addr - $remote_user [$time_local] "$request" '
                        '$status $body_bytes_sent "$http_referer" '
                        '"$http_user_agent" host="$host" upstream="$upstream_addr" '
@@ -655,7 +670,9 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 	// It records only the normalized path (without query parameters), never client
 	// addresses, headers, cookies, request bodies or credentials.
 	logFormat += `
+    map $request_id $fnproxy_waf_checked { default 0; }
     map $host $fnproxy_rule_id { default "default"; }
+    log_format fnproxy_topology escape=json '{"rule":"$fnproxy_rule_id","client":"$remote_addr","upstream":"$upstream_addr","bytes":$body_bytes_sent}';
     log_format fnproxy_metrics escape=json '{"time":$msec,"rule":"$fnproxy_rule_id","method":"$request_method","uri":"$uri","status":$status,"bytes":$body_bytes_sent,"request_time":$request_time,"upstream":"$upstream_addr","upstream_status":"$upstream_status","upstream_header_time":"$upstream_header_time","upstream_time":"$upstream_response_time","limit_req_status":"$limit_req_status","limit_conn_status":"$limit_conn_status","limit_policy":"$fnproxy_limit_policy"}';`
 	// Embed a bounded snapshot in the applied config so later edits or deletions
 	// cannot rewrite the meaning of historical limit events.
@@ -854,7 +871,7 @@ func renderStreamPrelude(state State) string {
 	return builder.String()
 }
 
-func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]CertificateMeta) (string, error) {
+func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]CertificateMeta, settings Settings) (string, error) {
 	var builder strings.Builder
 	builder.WriteString("server {\n")
 	address := rule.ListenAddress
@@ -917,10 +934,12 @@ func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]Cert
 	if rule.MaxConnections > 0 {
 		fmt.Fprintf(&builder, "    limit_conn fnproxy_stream_conn_%s %d;\n", rule.ID, rule.MaxConnections)
 	}
-	if rule.AccessLog {
+	if rule.AccessLog && settings.MenuEnabled("logs") {
 		fmt.Fprintf(&builder, "    access_log %s fnproxy_stream;\n", nginxQuote(m.paths.NginxStreamLog))
+	}
+	if rule.AccessLog && settings.MenuEnabled("errors") {
 		fmt.Fprintf(&builder, "    access_log %s fnproxy_stream_metrics_%s buffer=32k flush=1s;\n", nginxQuote(m.paths.StreamMetricsLog()), rule.ID)
-	} else {
+	} else if !rule.AccessLog || !settings.MenuEnabled("logs") {
 		builder.WriteString("    access_log off;\n")
 	}
 	builder.WriteString("}\n")
@@ -1110,7 +1129,7 @@ func (m *Manager) renderDefaultServer(item struct {
 	return builder.String(), nil
 }
 
-func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateMeta, pools map[string]domain.UpstreamPool) (string, error) {
+func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateMeta, pools map[string]domain.UpstreamPool, instances ...domain.WAFInstance) (string, error) {
 	var builder strings.Builder
 	catchAll := len(rule.Domains) == 1 && rule.Domains[0] == "*"
 	builder.WriteString("server {\n")
@@ -1131,6 +1150,17 @@ func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateM
 	}
 	fmt.Fprintf(&builder, "    server_name %s;\n", strings.Join(serverNames, " "))
 	fmt.Fprintf(&builder, "    set $fnproxy_rule_id %s;\n", nginxQuote(rule.ID))
+	var waf *domain.WAFInstance
+	for _, instance := range instances {
+		for _, site := range instance.Sites {
+			if site == rule.ID {
+				waf = &instance
+				if err := m.writeWAF(&builder, instance, rule); err != nil {
+					return "", err
+				}
+			}
+		}
+	}
 	if rule.Authentication.Enabled {
 		authLocation := "/_nginx_web_internal_auth_" + rule.ID
 		fmt.Fprintf(&builder, "    auth_request %s;\n", authLocation)
@@ -1174,14 +1204,14 @@ func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateM
 		return builder.String(), nil
 	}
 
-	if err := m.renderHTTPLocation(&builder, rule, "/", "prefix", rule.RootLocation, rule.ID); err != nil {
+	if err := m.renderHTTPLocation(&builder, rule, "/", "prefix", rule.RootLocation, rule.ID, waf, 0); err != nil {
 		return "", err
 	}
-	for _, location := range rule.Locations {
+	for index, location := range rule.Locations {
 		if !location.Enabled {
 			continue
 		}
-		if err := m.renderHTTPLocation(&builder, rule, location.Path, location.Match, location.Settings, rule.ID+"_"+location.ID); err != nil {
+		if err := m.renderHTTPLocation(&builder, rule, location.Path, location.Match, location.Settings, rule.ID+"_"+location.ID, waf, index+1); err != nil {
 			return "", err
 		}
 	}
@@ -1189,7 +1219,7 @@ func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateM
 	return builder.String(), nil
 }
 
-func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, path, match string, settings domain.LocationSettings, cacheID string) error {
+func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, path, match string, settings domain.LocationSettings, cacheID string, waf *domain.WAFInstance, branch int) error {
 	prefix := ""
 	switch match {
 	case "exact":
@@ -1198,6 +1228,15 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		prefix = "~ "
 	}
 	fmt.Fprintf(builder, "\n    location %s%s {\n", prefix, nginxDirectiveQuote(path))
+	if waf != nil {
+		if settings.BackendType == "proxy" || settings.BackendType == "" {
+			target := strconv.Itoa(branch)
+			m.writeInspectorProxy(builder, *waf, rule, target)
+			fmt.Fprintf(builder, "    }\n    location @fnproxy_checked_%s {\n", target)
+		} else {
+			builder.WriteString("        error_page 418 = @fnproxy_inspect;\n        if ($fnproxy_waf_checked = 0) { return 418; }\n")
+		}
+	}
 	for _, rewrite := range settings.Rewrites {
 		fmt.Fprintf(builder, "        rewrite %s %s %s;\n", nginxDirectiveQuote(rewrite.Pattern), nginxDirectiveQuote(rewrite.Replacement), rewrite.Flag)
 	}

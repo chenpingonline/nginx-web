@@ -33,12 +33,16 @@ func (s *AppService) initializeAppliedAuth() {
 		var applied State
 		if json.Unmarshal(data, &applied) == nil {
 			state = applied
+		} else {
+			state.Settings.HiddenMenus = nil
 		}
 	} else if state.Dirty {
 		state.AuthProfiles = nil
 		state.GatewayRoutes = nil
+		state.Settings.HiddenMenus = nil
 	}
 	s.setAppliedAuthProfiles(state.AuthProfiles)
+	s.setAppliedMenus(state.Settings.HiddenMenus)
 	s.setAppliedGatewayRoutes(state.GatewayRoutes)
 }
 

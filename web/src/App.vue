@@ -43,6 +43,8 @@ import RuleGroups from "./components/RuleGroups.vue";
 import type { RuleGroup } from "./types";
 import RuleForm from "./components/RuleForm.vue";
 import RuleStatusSwitch from "./components/RuleStatusSwitch.vue";
+import WAFPage from "./components/WAFPage.vue";
+import NetworkTopology from "./components/NetworkTopology.vue";
 import DashboardPage from "./components/DashboardPage.vue";
 import ErrorDetailsPage from "./components/AnalysisPage.vue";
 import CertificateForm from "./components/CertificateForm.vue";
@@ -140,6 +142,8 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     label: "SSL/TLS 证书",
     subtitle: "管理证书导入、ACME 申请与自动续期",
   },
+  {id:"waf",icon:"certificate",label:"WAF 防火墙",subtitle:"管理站点防护实例与命中日志"},
+  {id:"topology",icon:"stream",label:"网络拓扑",subtitle:"查看代理流量与活动访客"},
   { id: "errors", icon: "requests", label: "请求分析", subtitle: "分析 HTTP / HTTPS 请求、性能与异常", groupLabel: "监控分析" },
   {
     id: "logs",
@@ -167,12 +171,26 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     subtitle: "调整默认端口与历史保留策略",
   },
 ];
-const visiblePages = computed(() => pages.filter(item => item.id !== "gateway" || fnosMode));
+const platformPages = computed(() => pages.filter(item => item.id !== "gateway" || fnosMode));
 const page = ref<Page>("dashboard"),
   overview = ref<Overview | null>(null),
   state = ref<State | null>(null),
   revisions = ref<Revision[]>([]),
   config = ref<GeneratedConfig | null>(null);
+const menuEnabled = (id: Page) => !overview.value?.hidden_menus?.includes(id);
+const visiblePages = computed(() => {
+  let group = "", lastGroup = "";
+  return platformPages.value.flatMap(item => {
+    if (item.groupLabel) group = item.groupLabel;
+    if (!menuEnabled(item.id)) return [];
+    const groupLabel = group !== lastGroup ? group : undefined;
+    lastGroup = group;
+    return [{ ...item, groupLabel }];
+  });
+});
+watch(visiblePages, items => {
+  if (!items.some(item => item.id === page.value)) setPage(items[0]?.id ?? "settings");
+}, { flush: "sync" });
 const incompatiblePorts = computed(() => {
   const value = state.value;
   if (!value || minListenPort === 1) return [];
@@ -389,24 +407,27 @@ function formatRuleBackend(rule: ProxyRule): string {
 async function copyRuleEntry(rule: ProxyRule, domain: string) {
   await copyProxyAddress(formatRuleEntry(rule, domain), "入口地址");
 }
+async function copyText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const previous = document.activeElement as HTMLElement | null;
+    const input = document.createElement("textarea");
+    input.value = value;
+    input.style.cssText = "position:fixed;left:-9999px;top:0";
+    // A modal dialog makes the rest of the page inert, including textareas.
+    const container = previous?.closest("dialog[open]") ?? document.querySelector("dialog:modal") ?? document.body;
+    container.appendChild(input);
+    try {
+      input.focus({ preventScroll: true });
+      input.select();
+      if (!document.execCommand("copy")) throw new Error("copy failed");
+    } finally { input.remove(); previous?.focus(); }
+  }
+}
 async function copyProxyAddress(value: string, label: string) {
   try {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      const previous = document.activeElement as HTMLElement | null;
-      const input = document.createElement("textarea");
-      input.value = value;
-      input.style.cssText = "position:fixed;left:-9999px;top:0";
-      // A modal dialog makes the rest of the page inert, including textareas.
-      const container = previous?.closest("dialog[open]") ?? document.querySelector("dialog:modal") ?? document.body;
-      container.appendChild(input);
-      try {
-        input.focus({ preventScroll: true });
-        input.select();
-        if (!document.execCommand("copy")) throw new Error("copy failed");
-      } finally { input.remove(); previous?.focus(); }
-    }
+    await copyText(value);
     toast(`${label}已复制`, "success");
   } catch { toast(`浏览器不允许复制，请手动选择${label}`, "error"); }
 }
@@ -487,6 +508,7 @@ function toast(message: string, type: Toast["type"] = "") {
 }
 function setPage(value: Page) {
   if (value === "errors") errorScope.value = { ...errorScope.value, rule: "" };
+  if (!menuEnabled(value)) return;
   page.value = value;
   menuOpen.value = false;
 }
@@ -501,14 +523,14 @@ async function loadCore(quiet = false) {
     busy.value = true;
   }
   try {
-    const [o, s, r] = await Promise.all([
+    const [o, s] = await Promise.all([
       request<Overview>("/overview"),
       request<State>("/state"),
-      request<Revision[]>("/revisions"),
+
     ]);
     overview.value = o;
     state.value = s;
-    revisions.value = r ?? [];
+    revisions.value = menuEnabled("revisions") ? await request<Revision[]>("/revisions") ?? [] : [];
     connectionError.value = "";
   } catch (error) {
     connectionError.value = errorMessage(error);
@@ -947,7 +969,7 @@ function toggleStreamRule(rule: StreamRule, enabled: boolean) {
 }
 async function copyConfig() {
   try {
-    await navigator.clipboard.writeText(configText.value);
+    await copyText(configText.value);
     configCopied.value = true;
     if (configCopiedTimer) window.clearTimeout(configCopiedTimer);
     configCopiedTimer = window.setTimeout(() => {
@@ -955,7 +977,8 @@ async function copyConfig() {
       configCopiedTimer = undefined;
     }, 1800);
   } catch {
-    toast("浏览器不允许复制，请手动选择文本", "error");
+    const message = "浏览器不允许复制，请手动选择文本";
+    if (!toasts.value.some(item => item.message === message)) toast(message, "error");
   }
 }
 function certificateState(notAfter: string) {
@@ -1054,7 +1077,7 @@ onBeforeUnmount(() => {
       </div>
     </aside>
     <div class="workspace-frame">
-    <div class="workspace">
+    <div class="workspace" :class="{ 'logs-workspace': page === 'logs' }">
       <div class="mobile-nav-bar">
         <button
           type="button"
@@ -1096,6 +1119,8 @@ onBeforeUnmount(() => {
             @errors="openErrorDetails"
             @navigate="setPage"
           />
+          <WAFPage v-else-if="page === 'waf'" :state="state" :busy="busy" @refresh="loadCore(true)" @apply="applyConfiguration" />
+          <NetworkTopology v-else-if="page === 'topology'" />
           <ErrorDetailsPage v-else-if="page === 'errors'"
             :overview="overview" :busy="busy" :updated-at="state.updated_at"
             :initial-minutes="errorScope.minutes" :initial-rule="errorScope.rule"
@@ -1133,6 +1158,7 @@ onBeforeUnmount(() => {
               @save="saveRateLimitPolicy"
               @remove="removeRateLimitPolicy"
               @refresh="loadCore()"
+              :analysis-enabled="menuEnabled('errors')"
               @inspect="setPage('errors')"
           /></template>
           <template v-else-if="page === 'rules'"
@@ -1322,7 +1348,7 @@ onBeforeUnmount(() => {
             </article></template
           >
           <template v-else-if="page === 'logs'"
-            ><article class="card">
+            ><article class="card log-card">
               <header class="card-header log-card-header">
                 <div>
                   <h2>实时日志</h2>
@@ -1480,12 +1506,8 @@ onBeforeUnmount(() => {
           >
           <template v-else-if="page === 'config'"
             ><article class="card">
-              <header class="card-header">
-                <div>
-                  <p>系统文件由结构化规则生成并保持只读；高级需求可单独管理自定义配置</p>
-                </div>
-                <span class="spacer"></span
-                ><button class="button ghost small" :disabled="busy" @click="loadConfig">
+              <header class="card-header config-toolbar">
+                <button class="button ghost small" :disabled="busy" @click="loadConfig">
                   <PhArrowClockwise :size="14" aria-hidden="true" />刷新配置
                 </button>
                 <button class="button secondary small" :disabled="busy" @click="runNginxAction('test')">
@@ -1517,10 +1539,11 @@ onBeforeUnmount(() => {
                   class="icon-button config-copy-button"
                   :aria-label="configCopied ? '配置已复制' : '复制当前配置文件'"
                   :title="configCopied ? '配置已复制' : '复制当前文件'"
+                  :disabled="!configText"
                   @click="copyConfig"
                 >
                   <PhCheckCircle v-if="configCopied" class="config-copy-success" :size="16" aria-hidden="true" />
-                  <PhCopy :size="16" aria-hidden="true" />
+                  <PhCopy v-else :size="16" aria-hidden="true" />
                 </button>
               </div>
               <pre class="code-view">{{
@@ -1530,6 +1553,7 @@ onBeforeUnmount(() => {
           >
           <template v-else>
             <RuntimeSettingsForm
+              :menus="platformPages"
               :settings="state.settings"
               :busy="busy"
               :dirty="state.dirty"
@@ -1613,6 +1637,7 @@ onBeforeUnmount(() => {
           :settings="state!.settings"
           :certificates="state!.certificates"
           :upstream-pools="state!.upstream_pools"
+          :rate-limits-enabled="menuEnabled('rate-limits')"
           :rate-limit-policies="state!.rate_limit_policies"
           :auth-profiles="state!.auth_profiles ?? []"
           :busy="busy"

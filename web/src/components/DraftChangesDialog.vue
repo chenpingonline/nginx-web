@@ -11,7 +11,7 @@ onMounted(() => {
   dialog.value?.showModal();
 });
 onBeforeUnmount(() => { dialog.value?.close(); returnFocus?.focus(); });
-const sections: Record<string, string> = { rules: "HTTP(S) 代理", stream_rules: "TCP/UDP 代理", gateway_routes: "飞牛网关", rule_groups: "代理分组", upstream_pools: "转发服务组", rate_limit_policies: "限流策略", auth_profiles: "访问认证", custom_configs: "自定义配置", settings: "全局设置" };
+const sections: Record<string, string> = { rules: "HTTP(S) 代理", stream_rules: "TCP/UDP 代理", gateway_routes: "飞牛网关", rule_groups: "代理分组", upstream_pools: "转发服务组", rate_limit_policies: "限流策略", auth_profiles: "访问认证", waf_instances:"WAF 防火墙", custom_configs: "自定义配置", settings: "全局设置" };
 const operations = { added: "新增", deleted: "删除", modified: "修改" };
 const totals = computed(() => (["added", "deleted", "modified"] as const).map(operation => ({ operation, count: props.changes.changes.filter(change => change.operation === operation).length })));
 const labels: Record<string, string> = {
