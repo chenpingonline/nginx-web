@@ -104,19 +104,18 @@ onBeforeUnmount(() => {
 <template>
   <section class="card waf">
     <header>
-      <h2>WAF 防火墙</h2>
-      <button
-        v-if="state.dirty"
-        class="button"
-        :disabled="busy"
-        @click="emit('apply')"
-      >
-        应用配置
-      </button>
-    </header>
-    <header>
       <h3>防护实例{{ state.dirty ? " · 草稿" : "" }}</h3>
-      <button class="button primary" @click="edit()">创建实例</button>
+      <div class="waf-actions">
+        <button
+          v-if="state.dirty"
+          class="button"
+          :disabled="busy"
+          @click="emit('apply')"
+        >
+          应用配置
+        </button>
+        <button class="button primary" @click="edit()">创建实例</button>
+      </div>
     </header>
     <div class="scroll">
       <table>
@@ -265,7 +264,7 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .waf + .waf {
-  margin-top: 14px;
+  margin-top: 8px;
 }
 .filters {
   justify-content: flex-end;
@@ -285,7 +284,7 @@ onBeforeUnmount(() => {
 }
 
 .waf {
-  padding: clamp(12px, 2vw, 24px);
+  padding: 10px 14px;
 }
 .mode {
   padding: 2px 8px;
@@ -312,16 +311,17 @@ footer {
   gap: 12px;
   flex-wrap: wrap;
 }
-.waf h2,
 .waf h3 {
   margin: 0;
 }
-.waf header + header {
-  margin-top: 22px;
+.waf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .scroll {
   overflow: auto;
-  margin-top: 12px;
+  margin-top: 6px;
 }
 .waf table {
   border-collapse: collapse;
@@ -331,7 +331,7 @@ footer {
 .waf th,
 .waf td {
   text-align: left;
-  padding: 12px 8px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
 }
