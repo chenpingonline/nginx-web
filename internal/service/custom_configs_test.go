@@ -23,3 +23,19 @@ func TestCustomConfigCRUD(t *testing.T) {
 		t.Fatal("deleted missing custom config")
 	}
 }
+
+func TestCustomConfigRejectsStaleParameterEdit(t *testing.T) {
+	s := testService(t)
+	original, err := s.SaveCustomConfig("", domain.CustomConfig{Name: "custom-test.conf", Content: "server { listen 9090; }"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := domain.CustomConfig{Name: original.Name, Content: "server { listen 9091; }"}
+	saved, err := s.UpdateCustomConfig(original.Name, edit, &original.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdateCustomConfig(original.Name, original, &original.Content); err == nil || s.State().CustomConfigs[0] != saved {
+		t.Fatal("stale edit must leave the newer draft intact")
+	}
+}

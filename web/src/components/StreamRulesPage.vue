@@ -36,6 +36,7 @@ const emit = defineEmits<{
   refresh: [];
   preview:[rule:StreamRule];
   source:[entry:SourceEntry];
+  sourceSaved: [];
 }>();
 const search = ref("");
 const protocolFilter = ref<"all" | "tcp" | "udp">("all");
@@ -245,7 +246,7 @@ watch(
       <p>{{ rules.length ? "调整关键词、协议或启用状态后重试。" : "创建独立监听端口并转发到单节点服务或 Stream 转发服务组。" }}</p>
     </div>
   </article>
-  <ConfigSources :entries="visibleSources" @edit="emit('source',$event)" />
+  <ConfigSources :entries="visibleSources" @saved="emit('sourceSaved')" @edit="emit('source',$event)" />
   <Teleport to="body">
     <div v-if="open" class="modal-backdrop" @mousedown.self="open = false">
       <section

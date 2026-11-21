@@ -15,14 +15,15 @@ import (
 
 // AppEntry contains only public launch metadata, never application settings or tokens.
 type AppEntry struct {
-	App        string `json:"app"`
-	Entry      string `json:"entry"`
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	Target     string `json:"target"`
-	GatewayURL string `json:"gateway_url,omitempty"`
-	Note       string `json:"note"`
-	Existing   bool   `json:"existing"`
+	RecommendedMode string `json:"recommended_mode,omitempty"`
+	App             string `json:"app"`
+	Entry           string `json:"entry"`
+	Name            string `json:"name"`
+	Path            string `json:"path"`
+	Target          string `json:"target"`
+	GatewayURL      string `json:"gateway_url,omitempty"`
+	Note            string `json:"note"`
+	Existing        bool   `json:"existing"`
 }
 
 type AppDiscovery struct {

@@ -94,6 +94,33 @@ type ProbeResult struct {
 	CanTrust    bool         `json:"can_trust"`
 }
 
+func inspectTLS(ctx context.Context, target *url.URL) (tls.ConnectionState, error) {
+	address := target.Host
+	if target.Port() == "" {
+		address = net.JoinHostPort(target.Hostname(), "443")
+	}
+	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 8 * time.Second}, Config: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}} // Certificate inspection only. Application data uses the verified transport.
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return tls.ConnectionState{}, err
+	}
+	cs := connection.(*tls.Conn).ConnectionState()
+	connection.Close()
+	return cs, nil
+}
+
+func FirstCertificate(ctx context.Context, target *url.URL) (string, error) {
+	cs, err := inspectTLS(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	if len(cs.PeerCertificates) == 0 {
+		return "", errors.New("目标未返回 TLS 证书")
+	}
+	fingerprint := Fingerprint(cs.PeerCertificates[0])
+	return fingerprint, VerifyPinned(cs, fingerprint)
+}
+
 func Probe(ctx context.Context, route domain.GatewayRoute) ProbeResult {
 	result := ProbeResult{Target: route.Target}
 	target, parseErr := url.Parse(route.Target)
@@ -105,18 +132,11 @@ func Probe(ctx context.Context, route domain.GatewayRoute) ProbeResult {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	if target.Scheme == "https" {
-		address := target.Host
-		if target.Port() == "" {
-			address = net.JoinHostPort(target.Hostname(), "443")
-		}
-		dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 8 * time.Second}, Config: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}} // diagnostic handshake only; no HTTP or credentials before verification
-		connection, err := dialer.DialContext(ctx, "tcp", address)
+		cs, err := inspectTLS(ctx, target)
 		if err != nil {
 			result.Code, result.Message = ErrorReason(err)
 			return result
 		}
-		cs := connection.(*tls.Conn).ConnectionState()
-		connection.Close()
 		if len(cs.PeerCertificates) == 0 {
 			result.Code = "tls_error"
 			result.Message = "目标未返回 TLS 证书"

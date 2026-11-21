@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chenpingonline/nginx-web/internal/domain"
+	"github.com/chenpingonline/nginx-web/internal/gatewayclient"
 	"github.com/chenpingonline/nginx-web/internal/platform"
 	"github.com/chenpingonline/nginx-web/internal/service"
 	webassets "github.com/chenpingonline/nginx-web/web"
@@ -265,5 +266,43 @@ func TestGatewayRelativeRedirectStaysInsideSelectedService(t *testing.T) {
 	response := gatewayRequest(api, "GET", gatewayPrefix+"/proxy/music/nested/panel", "")
 	if got := response.Header().Get("Location"); got != gatewayPrefix+"/proxy/music/signin?next=panel" {
 		t.Fatalf("relative redirect escaped: %s", got)
+	}
+}
+
+func TestGatewayFirstVisitPinsBeforeForwarding(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	api, svc, paths := gatewayTestAPI(t, upstream.URL)
+	const path = gatewayPrefix + "/proxy/music/"
+	if w := gatewayRequest(api, "GET", path, ""); w.Code != http.StatusBadGateway || calls != 0 {
+		t.Fatal("default trust policy", w.Code, calls)
+	}
+	route, _ := svc.GatewayRoute("music")
+	route.TrustFirstCertificate = true
+	if _, err := svc.SaveGatewayRoute(route.ID, route); err != nil {
+		t.Fatal(err)
+	}
+	if w := gatewayRequest(api, "GET", path, ""); w.Code != http.StatusNoContent || calls != 1 {
+		t.Fatal(w.Code, w.Body.String(), calls)
+	}
+	restarted, err := service.New(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, ok := restarted.GatewayRoute("music")
+	if !ok || pinned.TrustFirstCertificate || pinned.TLSFingerprint != gatewayclient.Fingerprint(upstream.Certificate()) || pinned.TLSTrustTarget != upstream.URL {
+		t.Fatal(pinned)
+	}
+	// A different saved pin must fail closed without recording the peer again.
+	pinned.TLSFingerprint = strings.Repeat("0", 64)
+	if _, err := svc.SaveGatewayRoute(pinned.ID, pinned); err != nil {
+		t.Fatal(err)
+	}
+	if w := gatewayRequest(api, "GET", path, ""); w.Code != http.StatusBadGateway || calls != 1 || !strings.Contains(w.Body.String(), "certificate_changed") {
+		t.Fatal(w.Code, w.Body.String(), calls)
 	}
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/chenpingonline/nginx-web/internal/domain"
@@ -9,7 +10,7 @@ import (
 	"strings"
 )
 
-func (s *AppService) DiscoverGatewayApps() (platform.AppDiscovery, error) {
+func (s *AppService) DiscoverGatewayApps(ctx context.Context) (platform.AppDiscovery, error) {
 	root := s.paths.AppRegistryDir
 	if root == "" {
 		root = "/var/apps"
@@ -19,6 +20,7 @@ func (s *AppService) DiscoverGatewayApps() (platform.AppDiscovery, error) {
 		return result, err
 	}
 	decorateGatewayApps(&result, s.State().GatewayRoutes)
+	recommendGatewayModes(ctx, result.Entries)
 	return result, nil
 }
 
@@ -77,8 +79,47 @@ func (s *AppService) SaveGatewayRoute(id string, input domain.GatewayRoute) (dom
 		input.ID = domain.RandomID()
 	} else {
 		input.ID = id
+		// The editor may have opened before the first visit recorded a pin.
+		if input.TrustFirstCertificate {
+			for _, current := range s.store.Snapshot().GatewayRoutes {
+				if current.ID == id && current.Target == input.Target && current.TLSFingerprint != "" {
+					input.TLSFingerprint, input.TLSTrustTarget = current.TLSFingerprint, current.TLSTrustTarget
+					input.TrustFirstCertificate = false
+				}
+			}
+		}
 	}
 	return input, s.changeGatewayRoute(input.ID, &input, id != "")
+}
+
+// Record the first pin only while both the active route and its saved configuration
+// still match the route that authorized this handshake.
+func (s *AppService) PinFirstGatewayCertificate(expected domain.GatewayRoute, fingerprint string) (domain.GatewayRoute, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.GatewayRoute(expected.Path)
+	if ok && current.ID == expected.ID && current.Target == expected.Target && current.TLSFingerprint == fingerprint {
+		return current, nil
+	}
+	if !ok || !expected.TrustFirstCertificate || current != expected || !slices.Contains(s.store.Snapshot().GatewayRoutes, expected) {
+		return domain.GatewayRoute{}, errors.New("网关配置或证书已更改，请重新访问")
+	}
+	current.TrustFirstCertificate = false
+	current.TLSFingerprint = fingerprint
+	current.TLSTrustTarget = domain.GatewayTrustTarget(current.Target)
+	return current, s.changeGatewayRoute(current.ID, &current, true)
+}
+
+func (s *AppService) SetGatewayRouteEnabled(id string, enabled bool) (domain.GatewayRoute, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, route := range s.store.Snapshot().GatewayRoutes {
+		if route.ID == id {
+			route.Enabled = enabled
+			return route, s.changeGatewayRoute(id, &route, true)
+		}
+	}
+	return domain.GatewayRoute{}, errors.New("找不到指定网关规则")
 }
 
 func (s *AppService) DeleteGatewayRoute(id string) error {

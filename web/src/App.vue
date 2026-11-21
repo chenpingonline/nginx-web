@@ -40,7 +40,7 @@ const appVersion = __APP_VERSION__;
 defineProps<{ adminUsername?: string; loggingOut?: boolean }>();
 const emit = defineEmits<{ logout: [] }>();
 import RuleGroups from "./components/RuleGroups.vue";
-import type { RuleGroup } from "./types";
+import type { GatewayRoute, RuleGroup } from "./types";
 import RuleForm from "./components/RuleForm.vue";
 import RuleStatusSwitch from "./components/RuleStatusSwitch.vue";
 import WAFPage from "./components/WAFPage.vue";
@@ -334,6 +334,10 @@ async function showConfig(id:string,name:string,stream=false) {
     rulePreview.value={...data,name,draft:!!state.value?.dirty};
   } catch (e) {toast(errorMessage(e),"error");}
 }
+async function sourceSaved() {
+  toast("自定义配置已保存为草稿，请校验后应用", "success");
+  await loadCore(true);
+}
 async function editSource(entry:SourceEntry) {
   openCustomConfig(entry.file);
   await nextTick();
@@ -518,6 +522,12 @@ function openErrorDetails(scope: { minutes: number; rule: string }) {
   errorScope.value = scope;
   document.querySelector(".workspace")?.scrollTo({ top: 0 });
 }
+function updateGatewayRoute(updated: GatewayRoute) {
+  if (state.value?.gateway_routes) {
+    state.value.gateway_routes = state.value.gateway_routes.map(route => route.id === updated.id ? updated : route);
+  }
+}
+
 async function loadCore(quiet = false) {
   if (!quiet) {
     loading.value = true;
@@ -1128,10 +1138,10 @@ onBeforeUnmount(() => {
             @overview="overview = $event" @edit="openDashboardRule"
           />
           <BackupPage v-else-if="page === 'backup'" :state="state" :busy="busy" @download="downloadBackup" @restore="restoreBackup" @apply="applyConfiguration" />
-          <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" :busy="busy" @refresh="loadCore(true)" />
+          <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" @updated="updateGatewayRoute" :busy="busy" @refresh="loadCore(true)" />
           <template v-else-if="page === 'streams'">
             <StreamRulesPage
-              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @preview="(r)=>showConfig(r.id,r.name,true)"
+              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @source-saved="sourceSaved" @preview="(r)=>showConfig(r.id,r.name,true)"
               :dirty="state.dirty"
               :pending-toggles="streamToggleTargets"
               :pools="state.upstream_pools"
@@ -1199,7 +1209,7 @@ onBeforeUnmount(() => {
               <button class="button ghost" :disabled="!hasRuleFilters" @click="resetRuleFilters">重置筛选</button>
               <span class="filter-count">{{ filteredRules.length + filteredSources.length }} / {{ state.rules.length + httpSources.length }} 条</span>
             </div>
-            <ConfigSources :entries="filteredSources" @edit="editSource" />
+            <ConfigSources :entries="filteredSources" @saved="sourceSaved" @edit="editSource" />
             <RuleGroups ref="groupPanel" :groups="ruleGroups" :rules="state.rules" :certificates="state.certificates"
               :selected="selectedGroup" :busy="busy" :default-port="state.settings.default_http_port"
               :save="saveRuleGroup" :remove="deleteRuleGroup" @select="selectedGroup = $event" />

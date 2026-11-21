@@ -11,14 +11,15 @@ import (
 // GatewayRoute is an explicit administrator-controlled HTTP destination.
 // Paths are one segment under /app/nginx-web/proxy/, never arbitrary URLs.
 type GatewayRoute struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Path           string `json:"path"`
-	Target         string `json:"target"`
-	Enabled        bool   `json:"enabled"`
-	Compatibility  string `json:"compatibility,omitempty"`
-	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
-	TLSTrustTarget string `json:"tls_trust_target,omitempty"`
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Path                  string `json:"path"`
+	Target                string `json:"target"`
+	Enabled               bool   `json:"enabled"`
+	Compatibility         string `json:"compatibility,omitempty"`
+	TrustFirstCertificate bool   `json:"trust_first_certificate,omitempty"`
+	TLSFingerprint        string `json:"tls_fingerprint,omitempty"`
+	TLSTrustTarget        string `json:"tls_trust_target,omitempty"`
 }
 
 var gatewayPathPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}$`)
@@ -56,6 +57,9 @@ func ValidateGatewayRoutes(routes []GatewayRoute) error {
 		}
 		if r.Compatibility != "" && r.Compatibility != "subpath" && r.Compatibility != "ikuai-v4" {
 			return errors.New("不支持的网关页面适配模式")
+		}
+		if r.TrustFirstCertificate && (u.Scheme != "https" || r.TLSFingerprint != "") {
+			return errors.New("首次信任仅适用于尚未指定证书的 HTTPS 服务")
 		}
 		if r.TLSFingerprint != "" || r.TLSTrustTarget != "" {
 			if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(r.TLSFingerprint) || u.Scheme != "https" || r.TLSTrustTarget != GatewayTrustTarget(r.Target) {

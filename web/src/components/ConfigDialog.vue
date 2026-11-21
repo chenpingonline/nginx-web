@@ -30,13 +30,33 @@ const blocks = computed(() => {
   }
 });
 const isLocation = computed(() => blocks.value[0]?.words[0] === "location");
+const migrationHints: [RegExp, string, string][] = [
+  [/^http:\/\/unix:.*\/waf\.sock:/, "WAF 检测服务", "在目标机配置同等防护，确认 WAF 服务已启动，并将套接字路径指向该服务。"],
+  [/^http:\/\/unix:.*:\/internal\/basic-auth\//, "访问认证服务", "在目标机重建这条规则的认证策略，并将认证请求指向可用的认证服务。"],
+  [/^http:\/\/unix:/, "本地服务", "确认目标服务已启动，并更新 Unix 套接字路径。"],
+  [/^ssl_certificate_key\s/, "TLS 私钥", "在目标机安全配置与证书匹配的私钥，更新文件路径并限制读取权限。"],
+  [/^ssl_certificate\s/, "TLS 证书链", "在目标机配置该域名的证书链，并更新文件路径。"],
+  [/^auth_basic_user_file\s/, "密码文件", "迁移认证文件，更新路径并确认 Nginx 可以读取。"],
+  [/^(root|alias)\s/, "站点目录", "迁移站点文件，更新目录路径并确认 Nginx 可以读取。"],
+  [/^access_log\s/, "访问日志", "核对目标日志路径和写入权限；使用命名日志格式时，一并迁移 log_format 定义。"],
+  [/^fnproxy_req_/, "请求限流", "从 HTTP 公共配置迁移同名 limit_req_zone，核对限流键和速率。"],
+  [/^fnproxy_(?:stream_)?conn_/, "连接限流", "在对应的 http 或 stream 配置中迁移同名 limit_conn_zone。"],
+  [/^fnproxy_cache_/, "代理缓存", "迁移定义同名缓存区的 proxy_cache_path，并准备可写的缓存目录。"],
+  [/^fnproxy_stream_metrics_/, "流量日志格式", "从 stream 公共配置迁移同名 log_format。"],
+  [/^fnproxy_(up|stream)_/, "转发服务组", "迁移同名 upstream 配置，核对目标机到各后端的连接。"],
+  [/^\$(connection_upgrade|fnproxy_client_host|fnproxy_waf_checked)$/, "HTTP 变量", "从主配置复制定义该变量的完整 map 块，放入目标 Nginx 的 http 块。"],
+  [/^\$/, "配置变量", "在原配置中查找该变量的定义，并在目标机的相同作用域中配置。"],
+];
 const dependencies = computed(() => {
   const content = props.preview?.content || "";
   const references =
     content.match(
       /\$connection_upgrade\b|\$fnproxy_(?!rule_id\b)\w+|\bfnproxy_(?:up|req|conn|cache|stream)_\w+|(?:ssl_certificate(?:_key)?|auth_basic_user_file|root|alias|access_log)\s+[^;]+|http:\/\/unix:[^";]+/g,
     ) ?? [];
-  return [...new Set(references)];
+  return [...new Set(references)].filter(value => !/^access_log\s+off\s*$/.test(value)).map(value => {
+    const hint = migrationHints.find(([pattern]) => pattern.test(value));
+    return { value, title: hint?.[1] ?? "配置引用", action: hint?.[2] ?? "在目标机核对该引用的定义和路径。" };
+  });
 });
 watch([source, target], () => {
   candidate = undefined;
@@ -77,20 +97,23 @@ async function run(save: boolean) {
     aria-labelledby="config-dialog-title"
     @cancel.prevent="!working && emit('close')"
   >
-    <h2 id="config-dialog-title">
-      {{
-        preview
-          ? (preview.draft ? "草稿配置" : "规则配置") + " · " + preview.name
-          : "从 Nginx 配置导入"
-      }}
-    </h2>
+    <header class="config-dialog-heading">
+      <h2 id="config-dialog-title">{{ preview ? (preview.draft ? "草稿配置" : "规则配置") + " · " + preview.name : "从 Nginx 配置导入" }}</h2>
+      <div v-if="preview" class="preview-actions">
+        <button class="button ghost" @click="emit('close')">关闭</button>
+        <button class="button primary" @click="emit('copy', preview.content, 'Nginx 配置')">复制配置</button>
+      </div>
+    </header>
     <template v-if="preview">
       <pre>{{ preview.content }}</pre>
       <details v-if="dependencies.length">
         <summary>迁移时需要的依赖（{{ dependencies.length }}）</summary>
-        <ul>
-          <li v-for="value in dependencies" :key="value">
-            <code>{{ value }}</code>
+        <p>仅在把这段配置复制到另一台 Nginx 时逐项核对。准备好依赖后，运行 <code>nginx -t</code> 校验，再重载并测试转发。</p>
+        <ul class="migration-list">
+          <li v-for="item in dependencies" :key="item.value">
+            <strong>{{ item.title }}</strong>
+            <code>{{ item.value }}</code>
+            <span>{{ item.action }}</span>
           </li>
         </ul>
       </details>
@@ -132,40 +155,31 @@ async function run(save: boolean) {
         <pre v-for="(content, i) in generated" :key="i">{{ content }}</pre>
       </template>
     </template>
-    <footer>
+    <footer v-if="!preview">
       <button class="button ghost" :disabled="working" @click="emit('close')">
         关闭
       </button>
       <button
-        v-if="preview"
-        class="button primary"
-        @click="emit('copy', preview.content, 'Nginx 配置')"
+        v-if="!isLocation"
+        class="button secondary"
+        :disabled="working || !source.trim()"
+        @click="emit('raw', source)"
       >
-        复制配置
+        保留为自定义配置
       </button>
-      <template v-else>
-        <button
-          v-if="!isLocation"
-          class="button secondary"
-          :disabled="working || !source.trim()"
-          @click="emit('raw', source)"
-        >
-          保留为自定义配置
-        </button>
-        <button
-          class="button primary"
-          :disabled="working || !source.trim()"
-          @click="run(generated.length > 0)"
-        >
-          {{
-            working
-              ? "处理中…"
-              : generated.length
-                ? "确认保存为草稿"
-                : "预览导入"
-          }}
-        </button>
-      </template>
+      <button
+        class="button primary"
+        :disabled="working || !source.trim()"
+        @click="run(generated.length > 0)"
+      >
+        {{
+          working
+            ? "处理中…"
+            : generated.length
+              ? "确认保存为草稿"
+              : "预览导入"
+        }}
+      </button>
     </footer>
   </dialog>
 </template>
@@ -184,8 +198,18 @@ async function run(save: boolean) {
 .config-dialog::backdrop {
   background: #0008;
 }
+.config-dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.preview-actions { display: flex; gap: 8px; margin-inline-start: auto; }
 h2 {
-  margin: 0 0 14px;
+  overflow-wrap: anywhere;
+  margin: 0;
   font-size: 18px;
 }
 textarea {
@@ -202,6 +226,10 @@ pre {
   background: var(--frame);
   padding: 12px;
 }
+.migration-list { list-style: none; padding: 0; margin: 0; }
+.migration-list li { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); }
+.migration-list li > code { min-width: 0; }
+.migration-list li > span { color: var(--text-muted); }
 code,
 p {
   overflow-wrap: anywhere;

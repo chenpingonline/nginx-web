@@ -2,6 +2,8 @@ import type { CustomConfig, LocationSettings } from "./types";
 
 interface Directive {
   words: string[];
+  argsStart: number;
+  argsEnd: number;
   children?: Directive[];
   start: number;
   line: number;
@@ -24,8 +26,12 @@ export function parseConfig(source: string): Directive[] {
     start = 0,
     startLine = 1,
     variable = false;
-  function finish() {
-    if (active) words.push(word);
+  let argsStart = 0, argsEnd = 0;
+  function finish(end: number) {
+    if (active) {
+      words.push(word);
+      argsEnd = end;
+    }
     word = "";
     active = false;
   }
@@ -36,7 +42,7 @@ export function parseConfig(source: string): Directive[] {
       continue;
     }
     if (!quote && !variable && /\s/.test(c)) {
-      finish();
+      finish(i);
       if (c === "\n") line++;
       continue;
     }
@@ -46,14 +52,14 @@ export function parseConfig(source: string): Directive[] {
     }
     if (!quote && !variable && c === "{" && word.endsWith("$")) variable = true;
     else if (!quote && !variable && "{};".includes(c)) {
-      finish();
+      finish(i);
       if (c === "}") {
         if (words.length || stack.length === 1)
           fail(line, "多余的右括号或缺少分号");
         stack.pop();
       } else {
         if (!words.length) fail(line, "缺少指令名称");
-        const node: Directive = { words, start, line: startLine };
+        const node: Directive = { words, start, line: startLine, argsStart, argsEnd };
         stack[stack.length - 1].push(node);
         if (c === "{") {
           if (stack.length > 128) fail(line, "配置嵌套过深");
@@ -64,6 +70,7 @@ export function parseConfig(source: string): Directive[] {
       }
       continue;
     } else if (variable && c === "}") variable = false;
+    if (!active && words.length === 1) argsStart = i;
     active = true;
     if (c === "\\") {
       if (++i === source.length) fail(line, "末尾转义不完整");
@@ -168,6 +175,58 @@ export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
     return entries;
   });
 }
+const parameterLabels: Record<string, string> = {
+  listen: "监听地址与选项", server_name: "域名", location: "匹配路径",
+  proxy_pass: "转发地址", proxy_set_header: "转发请求头", proxy_http_version: "转发 HTTP 版本",
+  proxy_read_timeout: "读取超时", proxy_connect_timeout: "连接超时", proxy_send_timeout: "发送超时",
+  ssl_certificate: "证书路径", ssl_certificate_key: "私钥路径", client_max_body_size: "请求体大小上限",
+  http2: "HTTP/2", return: "返回响应", root: "站点目录", alias: "路径别名",
+};
+interface Parameter {
+  label: string;
+  start: number;
+  end: number;
+  original: string;
+  value: string;
+}
+export function parameterGroups(entry: SourceEntry) {
+  const source = entry.file.content;
+  const groups: { title: string; fields: Parameter[] }[] = [];
+  const server = parseConfig(source).find(node => node.start === entry.start && node.words[0] === "server");
+  function visit(block: Directive) {
+    const fields: Parameter[] = [];
+    const nodes = block.children ?? [];
+    for (const node of [block, ...nodes.filter(n => !n.children)]) {
+      const name = node.words[0];
+      if (!Object.prototype.hasOwnProperty.call(parameterLabels, name) || node.words.length < 2) continue;
+      const original = source.slice(node.argsStart, node.argsEnd);
+      // Multiline arguments may contain comments between tokens. Leave them in the source editor.
+      if (/[\r\n]/.test(original)) continue;
+      fields.push({ label: parameterLabels[name], start: node.argsStart, end: node.argsEnd, original, value: original });
+    }
+    if (fields.length) groups.push({ title: block.words.join(" "), fields });
+    for (const node of nodes) if (node.children && node.words[0] === "location") visit(node);
+  }
+  if (server) visit(server);
+  return groups;
+}
+export function editParameters(source: string, fields: Parameter[]) {
+  let result = source;
+  const changed = fields.filter(f => f.original !== f.value).sort((a, b) => b.start - a.start);
+  for (const field of changed) {
+    const value = field.value.trim();
+    try {
+      const nodes = parseConfig("param " + value + ";");
+      if (nodes.length !== 1 || nodes[0].children || nodes[0].words.length < 2 ||
+          nodes[0].argsStart !== 6 || nodes[0].argsEnd !== 6 + value.length || /[\r\n]/.test(value)) throw Error();
+    } catch {
+      throw new Error(field.label + "需要填写一条指令的参数");
+    }
+    result = result.slice(0, field.start) + value + result.slice(field.end);
+  }
+  return result;
+}
+
 export function matchSource(
   entry: SourceEntry,
   search: string,

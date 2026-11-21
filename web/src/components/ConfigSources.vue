@@ -3,8 +3,11 @@ import { ref } from "vue";
 import { PhCaretDown, PhCaretRight } from "@phosphor-icons/vue";
 import type { SourceEntry } from "../nginxConfig";
 
+import SourceParameterDialog from "./SourceParameterDialog.vue";
+
+const editing = ref<SourceEntry>();
 defineProps<{ entries: SourceEntry[] }>();
-defineEmits<{ edit: [entry: SourceEntry] }>();
+defineEmits<{ edit: [entry: SourceEntry]; saved: [] }>();
 
 const expanded = ref(new Set<string>());
 const keyOf = (entry: SourceEntry) => entry.file.name + ":" + entry.start;
@@ -46,6 +49,7 @@ function toggle(entry: SourceEntry) {
                     <PhCaretRight v-else aria-hidden="true" />
                     {{ expanded.has(keyOf(item)) ? '收起详情' : '展开详情' }}
                   </button>
+                  <button v-if="!item.error" type="button" class="button small" @click="editing = item">编辑参数</button>
                   <button type="button" class="button ghost small" @click="$emit('edit', item)">编辑源文件</button>
                 </div>
               </td>
@@ -64,6 +68,7 @@ function toggle(entry: SourceEntry) {
       </table>
     </div>
   </article>
+  <SourceParameterDialog v-if="editing" :entry="editing" @close="editing = undefined" @saved="editing = undefined; $emit('saved')" />
 </template>
 
 <style scoped>

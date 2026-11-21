@@ -37,3 +37,19 @@ test("multi-server import, unsupported directives and ambiguous upstream URI", (
     /proxy_pass/,
   );
 });
+
+test("edit only selected server parameters and preserve surrounding source", async () => {
+  const { parameterGroups, editParameters } = await import("../src/nginxConfig.ts");
+  const content = '# test\nserver { listen 9090 ssl; server_name a b; location / { proxy_set_header X "a;b"; proxy_pass http://old; # note\ninclude custom; } }\nserver { location / { proxy_pass http://old; } }\n';
+  const groups = parameterGroups(sourceEntries([{name: "custom-test.conf", content}])[0]);
+  assert.deepEqual(groups.map(g => g.title), ["server", "location /"]);
+  const fields = groups.flatMap(g => g.fields);
+  assert.equal(editParameters(content, fields), content);
+  const target = fields.find(f => f.original === "http://old");
+  target.value = "http://new";
+  assert.equal(editParameters(content, fields), content.replace("http://old", "http://new"));
+  for (const value of ["", "foo; return 200", "foo # comment", "foo {}"]) {
+    target.value = value;
+    assert.throws(() => editParameters(content, fields));
+  }
+});

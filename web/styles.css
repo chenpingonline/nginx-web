@@ -322,7 +322,8 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 
 .table-wrap { overflow-x: auto; }
 .proxy-rule-card { overflow: hidden; }
-.proxy-rule-card > .table-wrap { border-radius: inherit; }
+.proxy-rule-card > .table-wrap,
+.card > .table-wrap:only-child { border-radius: inherit; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table th { color: var(--text-muted); font-weight: 630; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--surface-soft); white-space: nowrap; }
 .table td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -389,7 +390,7 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .code-tabs { display: flex; gap: 6px; padding: 11px 13px; border-bottom: 1px solid var(--line); overflow-x: auto; }
 .code-tab { border: 0; background: transparent; color: var(--text-muted); border-radius: 7px; padding: 7px 10px; font-size: 13px; white-space: nowrap; }
 .code-tab.active { background: var(--accent-soft); color: var(--accent-dark); font-weight: 650; }
-.code-view { margin: 0; min-height: 420px; max-height: calc(100vh - 196px); overflow: auto; padding: 13px; background: #171d22; color: #d6dfe5; border-radius: 0 0 var(--radius) var(--radius); font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+.code-view { margin: 0; min-height: min(420px, calc(100vh - 196px)); max-height: calc(100vh - 196px); overflow: auto; padding: 13px; background: #171d22; color: #d6dfe5; border-radius: 0 0 var(--radius) var(--radius); font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
 
 .notice { border-radius: 9px; padding: 9px 11px; font-size: 13px; line-height: 1.45; border: 1px solid var(--line); background: var(--surface-soft); color: var(--text-muted); }
 .notice.warning { background: var(--warning-soft); border-color: #f0dfbf; color: #8d611f; }
@@ -743,13 +744,18 @@ html[data-theme="dark"] { --scroll-thumb: #686b6e; }
 .config-copy-button { width: auto; min-width: var(--control-height); height: var(--control-height); padding: 0 7px; display: inline-flex; gap: 4px; flex: 0 0 auto; }
 .config-copy-success { color: var(--accent); }
 
-/* Keep log scrollbars visible instead of inheriting the workspace's transparent thumb. */
-.log-view { scrollbar-width: auto; scrollbar-color: #7b8994 #20282e; }
+/* Keep code and log scrollbars visible instead of inheriting the workspace's transparent thumb. */
+.code-view, .log-view { scrollbar-width: auto; scrollbar-color: #7b8994 #20282e; }
 .log-view:not(.is-wrapped) { overflow-x: scroll; }
-.log-view::-webkit-scrollbar { width: 12px; height: 12px; }
+.code-view::-webkit-scrollbar, .log-view::-webkit-scrollbar { width: 12px; height: 12px; }
+.code-view::-webkit-scrollbar-track, .code-view::-webkit-scrollbar-corner,
 .log-view::-webkit-scrollbar-track, .log-view::-webkit-scrollbar-corner { background: #20282e; }
-.log-view::-webkit-scrollbar-thumb { background: #7b8994; border: 2px solid #20282e; border-radius: 8px; }
-.log-view::-webkit-scrollbar-thumb:hover { background: #a4b2bd; }
+.code-view::-webkit-scrollbar-thumb, .log-view::-webkit-scrollbar-thumb { background: #7b8994; border: 2px solid #20282e; border-radius: 8px; }
+.code-view::-webkit-scrollbar-thumb:hover, .log-view::-webkit-scrollbar-thumb:hover { background: #a4b2bd; }
+
+@supports selector(::-webkit-scrollbar) {
+  .code-view { scrollbar-color: auto; }
+}
 
 .certificate-validity { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 .certificate-validity-dates { color: var(--text-muted); font-size: 13px; }

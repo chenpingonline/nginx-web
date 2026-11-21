@@ -328,7 +328,7 @@ export interface StreamRule extends StreamRuleInput {
   created_at: string;
   updated_at: string;
 }
-export interface GatewayRoute { id: string; name: string; path: string; target: string; enabled: boolean; compatibility?: "" | "subpath" | "ikuai-v4"; tls_fingerprint?: string; tls_trust_target?: string; }
+export interface GatewayRoute { id: string; name: string; path: string; target: string; enabled: boolean; compatibility?: "" | "subpath" | "ikuai-v4"; trust_first_certificate?: boolean; tls_fingerprint?: string; tls_trust_target?: string; }
 export interface WAFInstance {exclusions?:Record<string,number[]>;id:string;name:string;mode:"detect"|"block";sites:string[]}
 export interface State {
  waf_instances?:WAFInstance[];

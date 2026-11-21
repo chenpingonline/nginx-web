@@ -189,7 +189,7 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 			writeAPIError(w, http.StatusNotFound, "仅飞牛模式支持应用识别")
 			return
 		}
-		result, err := a.service.DiscoverGatewayApps()
+		result, err := a.service.DiscoverGatewayApps(r.Context())
 		writeResult(w, http.StatusOK, result, err)
 	case apiPath == "/api/gateway-probe" && r.Method == http.MethodPost:
 		if a.standalone {
@@ -234,6 +234,19 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 			}
 			route, err := a.service.SaveGatewayRoute(id, input)
 			writeResult(w, http.StatusOK, route, err)
+		case http.MethodPatch:
+			var input struct {
+				Enabled *bool `json:"enabled"`
+			}
+			if !decodeJSON(w, r, &input) {
+				return
+			}
+			if input.Enabled == nil {
+				writeAPIError(w, http.StatusBadRequest, "缺少启用状态")
+				return
+			}
+			route, err := a.service.SetGatewayRouteEnabled(id, *input.Enabled)
+			writeResult(w, http.StatusOK, route, err)
 		case http.MethodDelete:
 			err := a.service.DeleteGatewayRoute(id)
 			writeResult(w, http.StatusOK, map[string]bool{"ok": err == nil}, err)
@@ -267,11 +280,14 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 	case strings.HasPrefix(apiPath, "/api/custom-configs/"):
 		name := strings.TrimPrefix(apiPath, "/api/custom-configs/")
 		if r.Method == http.MethodPut {
-			var input domain.CustomConfig
-			if !decodeJSON(w, r, &input) {
+			var input struct {
+				domain.CustomConfig
+				ExpectedContent *string `json:"expected_content"`
+			}
+			if !decodeJSONLimit(w, r, &input, 6*1024*1024) {
 				return
 			}
-			config, err := a.service.SaveCustomConfig(name, input)
+			config, err := a.service.UpdateCustomConfig(name, input.CustomConfig, input.ExpectedContent)
 			writeResult(w, http.StatusOK, config, err)
 		} else if r.Method == http.MethodDelete {
 			err := a.service.DeleteCustomConfig(name)

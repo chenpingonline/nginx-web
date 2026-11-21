@@ -59,6 +59,19 @@ func (a *API) serveGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		serveGatewayBootstrap(w, prefix, cookiePrefix, route.Target)
 		return
 	}
+	if target.Scheme == "https" && route.TrustFirstCertificate && route.TLSFingerprint == "" {
+		fingerprint, err := gatewayclient.FirstCertificate(r.Context(), target)
+		if err != nil {
+			code, message := gatewayclient.ErrorReason(err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": message, "code": code})
+			return
+		}
+		route, err = a.service.PinFirstGatewayCertificate(route, fingerprint)
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	proxy := &httputil.ReverseProxy{
 		Transport:     gatewayclient.Transport(route),
 		FlushInterval: -1,

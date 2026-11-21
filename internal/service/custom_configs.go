@@ -8,6 +8,10 @@ import (
 )
 
 func (s *AppService) SaveCustomConfig(original string, input domain.CustomConfig) (domain.CustomConfig, error) {
+	return s.UpdateCustomConfig(original, input, nil)
+}
+
+func (s *AppService) UpdateCustomConfig(original string, input domain.CustomConfig, expected *string) (domain.CustomConfig, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if !strings.HasSuffix(input.Content, "\n") {
 		input.Content += "\n"
@@ -18,6 +22,9 @@ func (s *AppService) SaveCustomConfig(original string, input domain.CustomConfig
 		if original != "" {
 			for index := range configs {
 				if configs[index].Name == original {
+					if expected != nil && configs[index].Content != *expected {
+						return errors.New("源文件已更改，请刷新列表后重新编辑")
+					}
 					configs[index] = input
 					found = true
 					break
