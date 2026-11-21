@@ -46,6 +46,8 @@ const zoom = ref(1),
   layout = ref("tree"),
   listenerFilter = ref(""),
   showFilter = ref(false);
+const metric = ref<"hits" | "bytes">("hits");
+const sankey = computed(() => layout.value === "sankey");
 const listeners = computed(() => [
   ...new Set(frame.value?.sites.map((s) => s.listener)),
 ]);
@@ -65,6 +67,7 @@ interface Node {
   hits: number;
   bytes: number;
   clients: Set<string>;
+  missingUpstream?: boolean;
 }
 const widths = [46, 46, 188, 238, 250];
 const graph = computed(() => {
@@ -108,9 +111,16 @@ const graph = computed(() => {
       continue;
     const flows = flowsBySite.get(site.id) ?? [];
     const destinations = new Set(site.targets ?? []);
-    for (const f of flows)
-      for (const t of f.upstream.split(", "))
-        if (t && t !== "-") destinations.add(t);
+    const outcomes = flows.map((flow) => {
+      // Nginx separates retries with commas and upstream groups with spaced colons.
+      const attempts = flow.upstream
+        .split(/,|\s+:\s+/)
+        .map((value) => value.trim())
+        .filter((value) => value && value !== "-");
+      for (const target of attempts) destinations.add(target);
+      return { flow, target: attempts.at(-1) };
+    });
+    const hasMissing = outcomes.some((outcome) => !outcome.target);
     if (focus.value && !flows.length) continue;
     if (
       ![site.name, site.listener, ...destinations]
@@ -125,14 +135,21 @@ const graph = computed(() => {
       const dest = put(site.id + "|" + target, target, 4, host);
       dest.y = 72 + row++ * 64;
     }
-    if (!destinations.size) host.y = 72 + row++ * 64;
-    for (const f of flows) {
+    const missing = hasMissing
+      ? put("missing-upstream|" + site.id, "未记录到上游", 4, host)
+      : undefined;
+    if (missing) {
+      missing.missingUpstream = true;
+      missing.y = 72 + row++ * 64;
+    }
+    if (!destinations.size && !missing) host.y = 72 + row++ * 64;
+    for (const { flow: f, target } of outcomes) {
       for (const node of [host, listener, nginx, root]) {
         node.hits += f.requests;
         node.bytes += f.bytes;
         if (f.client) node.clients.add(f.client);
       }
-      const dest = byId.get(site.id + "|" + f.upstream.split(", ").at(-1));
+      const dest = target ? byId.get(site.id + "|" + target) : missing;
       if (dest) {
         dest.hits += f.requests;
         dest.bytes += f.bytes;
@@ -164,6 +181,35 @@ function edge(n: Node) {
     mid = (start + end) / 2;
   return `M ${start} ${p.y} C ${mid} ${p.y}, ${mid} ${n.y}, ${end} ${n.y}`;
 }
+// Stack each child's share along the parent's outgoing edge on one common scale.
+const bands = computed(() => {
+  const field = metric.value;
+  const peak = Math.max(
+    1,
+    ...graph.value.nodes.filter((n) => n.col === 2).map((n) => n[field]),
+  );
+  const used = new Map<Node, number>();
+  const paths = [];
+  for (const n of graph.value.nodes) {
+    const parent = n.parent;
+    if (!parent || n.col < 3 || !n[field]) continue;
+    const width = (40 * n[field]) / peak;
+    const offset = used.get(parent) ?? 0;
+    const startY = parent.y - (20 * parent[field]) / peak + offset + width / 2;
+    used.set(parent, offset + width);
+    const start = parent.x + widths[parent.col] / 2;
+    const end = n.x - widths[n.col] / 2;
+    const mid = (start + end) / 2;
+    const path = `M ${start} ${startY} C ${mid} ${startY}, ${mid} ${n.y}, ${end} ${n.y}`;
+    paths.push({ node: n, width, path });
+  }
+  return paths;
+});
+const visibleNodes = computed(() =>
+  sankey.value
+    ? graph.value.nodes.filter((n) => n.col >= 2)
+    : graph.value.nodes,
+);
 const expanded = ref(false);
 function exitExpanded(event: KeyboardEvent) {
   if (event.key === "Escape") expanded.value = false;
@@ -182,7 +228,7 @@ function traffic(bytes: number) {
   return bytes + " B";
 }
 function label(n: Node) {
-  return mask.value && n.col >= 3
+  return mask.value && n.col >= 3 && !n.missingUpstream
     ? names[n.col].split(" / ")[0] +
         " " +
         (graph.value.nodes.filter((other) => other.col === n.col).indexOf(n) +
@@ -259,9 +305,31 @@ onBeforeUnmount(() => {
         </option></AppSelect
       >
       <AppSelect class="select" aria-label="拓扑布局" v-model="layout"
-        ><option value="tree">树形</option>
+        ><option value="tree">链路树</option>
+        <option value="sankey">流量桑基</option>
         <option value="list">列表</option></AppSelect
       >
+      <div
+        v-if="sankey"
+        class="metric-switch"
+        role="group"
+        aria-label="流量带宽度"
+      >
+        <button
+          class="button"
+          :aria-pressed="metric === 'hits'"
+          @click="metric = 'hits'"
+        >
+          请求数
+        </button>
+        <button
+          class="button"
+          :aria-pressed="metric === 'bytes'"
+          @click="metric = 'bytes'"
+        >
+          响应流量
+        </button>
+      </div>
       <input
         class="input topology-search"
         v-model="search"
@@ -294,17 +362,21 @@ onBeforeUnmount(() => {
     <div class="workspace">
       <div class="canvas-pane">
         <div
-          v-if="layout === 'tree'"
+          v-if="layout !== 'list'"
           class="plot"
           tabindex="0"
           aria-label="流量拓扑画布"
         >
           <svg
-            :viewBox="'0 0 1000 ' + graph.height"
-            :style="{ width: 100 * zoom + '%', minWidth: 850 * zoom + 'px' }"
+            :viewBox="(sankey ? '210 0 790 ' : '0 0 1000 ') + graph.height"
+            :style="{
+              width: 75 * zoom + '%',
+              minWidth: (sankey ? 510 : 637.5) * zoom + 'px',
+            }"
           >
             <text
               v-for="(name, i) in names"
+              v-show="!sankey || i >= 2"
               :key="name"
               :x="xs[i]"
               y="24"
@@ -312,11 +384,30 @@ onBeforeUnmount(() => {
             >
               {{ name }}
             </text>
-            <template v-for="n in graph.nodes" :key="n.id">
+            <template v-if="sankey">
+              <path
+                v-for="band in bands"
+                :key="band.node.id"
+                :d="band.path"
+                class="flow-band"
+                :class="{ unattributed: band.node.missingUpstream }"
+                :style="{ strokeWidth: band.width }"
+              >
+                <title>
+                  {{ label(band.node) }} ·
+                  {{
+                    metric === "hits"
+                      ? band.node.hits + " 次请求"
+                      : traffic(band.node.bytes)
+                  }}
+                </title>
+              </path>
+            </template>
+            <template v-for="n in sankey ? [] : graph.nodes" :key="n.id">
               <path v-if="n.parent" :class="{ hot: n.hits }" :d="edge(n)" />
             </template>
             <g
-              v-for="n in graph.nodes"
+              v-for="n in visibleNodes"
               :key="n.id"
               :transform="'translate(' + n.x + ' ' + n.y + ')'"
               tabindex="0"
@@ -394,11 +485,11 @@ onBeforeUnmount(() => {
             ><span>{{ n.hits }} 次请求</span>
           </button>
         </div>
-        <div v-if="layout === 'tree'" class="canvas-controls">
+        <div v-if="layout !== 'list'" class="canvas-controls">
           <button
             class="button"
             aria-label="缩小"
-            :disabled="zoom <= 0.75"
+            :disabled="zoom <= 0.25"
             @click="zoom -= 0.25"
           >
             −
@@ -409,7 +500,7 @@ onBeforeUnmount(() => {
           <button
             class="button"
             aria-label="放大"
-            :disabled="zoom >= 3"
+            :disabled="zoom >= 4"
             @click="zoom += 0.25"
           >
             ＋
@@ -552,6 +643,17 @@ onBeforeUnmount(() => {
   fill: none;
   stroke: var(--line-strong);
   stroke-width: 2;
+}
+.plot > svg > path.flow-band {
+  stroke: var(--accent);
+  opacity: 0.48;
+}
+.plot > svg > path.unattributed {
+  stroke: var(--text-muted);
+}
+.metric-switch {
+  display: inline-flex;
+  gap: 2px;
 }
 .plot g {
   cursor: pointer;
