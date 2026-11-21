@@ -142,9 +142,9 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     label: "SSL/TLS 证书",
     subtitle: "管理证书导入、ACME 申请与自动续期",
   },
-  {id:"waf",icon:"certificate",label:"WAF 防火墙",subtitle:"管理站点防护实例与命中日志"},
+  {id:"waf",icon:"certificate",label:"WAF 防火墙",subtitle:"管理站点防护实例与命中日志", groupLabel: "监控分析" },
   {id:"topology",icon:"stream",label:"网络拓扑",subtitle:"查看代理流量与活动访客"},
-  { id: "errors", icon: "requests", label: "请求分析", subtitle: "分析 HTTP / HTTPS 请求、性能与异常", groupLabel: "监控分析" },
+  { id: "errors", icon: "requests", label: "请求分析", subtitle: "分析 HTTP / HTTPS 请求、性能与异常" },
   {
     id: "logs",
     icon: "logs",

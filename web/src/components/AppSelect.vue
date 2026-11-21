@@ -1,7 +1,7 @@
 <script setup lang="ts" generic="T extends string | number">
 import { ref, useSlots, useId, nextTick, onBeforeUnmount, type VNode } from 'vue';
 defineOptions({ inheritAttrs: false });
-const props = defineProps<{ modelValue: T; disabled?: boolean; hideCheck?: boolean; searchable?: boolean; searchPlaceholder?: string }>();
+const props = defineProps<{ modelValue: T; disabled?: boolean; hideCheck?: boolean; menuClass?: string; searchable?: boolean; searchPlaceholder?: string }>();
 const emit = defineEmits<{ 'update:modelValue': [value: T]; change: [] }>();
 const slots = useSlots();
 const id = useId();
@@ -116,16 +116,16 @@ onBeforeUnmount(() => { close(); clearTimeout(searchTimer); });
 </script>
 <template>
   <button v-bind="$attrs" ref="trigger" type="button" class="app-select" role="combobox" aria-haspopup="listbox" :aria-expanded="open" :aria-controls="open ? id : undefined" :aria-activedescendant="open && active >= 0 ? `${id}-${active}` : undefined" :disabled="disabled" @click="open ? close() : show()" @keydown="key">
-    {{ items().find(item => item.value === modelValue)?.label ?? '请选择' }}
+    <slot name="prefix" />{{ items().find(item => item.value === modelValue)?.label ?? '请选择' }}
   <Teleport :to="teleportTarget">
-    <div v-if="open" ref="menu" class="app-select-menu" :class="{ searchable }" :style="placement">
+    <div v-if="open" ref="menu" class="app-select-menu" :class="[{ searchable }, menuClass]" :style="placement">
       <div v-if="searchable" class="app-select-search-wrap">
         <span class="app-select-search-icon" aria-hidden="true"></span>
         <input ref="searchInput" v-model="query" type="search" class="app-select-search" role="combobox" :placeholder="searchPlaceholder || '搜索选项'" aria-label="搜索选项" aria-expanded="true" :aria-controls="id" :aria-activedescendant="active >= 0 ? `${id}-${active}` : undefined" autocomplete="off" @input="filter" @keydown="searchKey" />
       </div>
       <div :id="id" class="app-select-options" role="listbox" :aria-label="($attrs['aria-label'] as string) || '选项'">
         <div v-for="{ item, index } in visibleItems()" :id="`${id}-${index}`" :key="index" :data-index="index" class="app-select-option" :class="{ highlighted: active === index, selected: !item.action && item.value === modelValue, disabled: item.disabled, action: item.action }" role="option" :aria-selected="!item.action && item.value === modelValue" :aria-disabled="item.disabled" @mousedown.prevent @pointermove="!item.disabled && (active = index)" @click="choose(index)">
-          <span v-if="!hideCheck && !item.action" class="app-select-check">{{ item.value === modelValue ? '✓' : '' }}</span><span>{{ item.label }}</span>
+          <span v-if="!hideCheck && !item.action" class="app-select-check">{{ item.value === modelValue ? '✓' : '' }}</span><slot name="option" :item="item"><span>{{ item.label }}</span></slot>
         </div>
         <div v-if="!visibleItems().length" class="app-select-empty">未找到匹配选项</div>
       </div>

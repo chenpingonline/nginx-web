@@ -2,6 +2,9 @@
 import { computed, onMounted, onBeforeUnmount, ref, shallowRef } from "vue";
 import {
   PhGlobe,
+  PhTreeStructure,
+  PhFlowArrow,
+  PhListBullets,
   PhHardDrives,
   PhPlugsConnected,
   PhBrowser,
@@ -42,8 +45,9 @@ const search = ref(""),
   mask = ref(false),
   selected = ref("nginx"),
   error = ref("");
+const layoutIcons = { tree: PhTreeStructure, sankey: PhFlowArrow, list: PhListBullets };
 const zoom = ref(1),
-  layout = ref("tree"),
+  layout = ref<keyof typeof layoutIcons>("tree"),
   listenerFilter = ref(""),
   showFilter = ref(false);
 const metric = ref<"hits" | "bytes">("hits");
@@ -167,10 +171,9 @@ const graph = computed(() => {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const n = nodes[i],
       list = children.get(n);
-    if (list) n.y = list.reduce((s, c) => s + c.y, 0) / list.length;
+    if (list) n.y = (list[0].y + list[list.length - 1].y) / 2;
     else if (!n.y) n.y = 100;
   }
-  root.y = nginx.y = Math.min(nginx.y, 136);
   return { nodes, height: Math.max(210, row * 64 + 55) };
 });
 function edge(n: Node) {
@@ -265,16 +268,19 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <section aria-label="网络拓扑" class="card topology" :class="{ expanded }">
-    <div class="tools">
-      <label
-        >活动访客
-        <AppSelect class="select" v-model="ip" searchable
-          ><option value="">全部 IP</option>
-          <option v-for="(v, i) in visitors" :key="v" :value="v">
-            {{ mask ? "访客 " + (i + 1) : v }}
-          </option></AppSelect
-        ></label
-      >
+    <div class="tools topology-toolbar">
+      <div class="fields">
+        <label class="visitor-field">访客来源 IP
+          <AppSelect class="select" v-model="ip" searchable search-placeholder="搜索近 60 秒的访客 IP" aria-label="访客来源 IP">
+            <option value="">全部访客</option>
+            <option v-for="(v, i) in visitors" :key="v" :value="v">{{ mask ? "访客 " + (i + 1) : v }}</option>
+          </AppSelect>
+        </label>
+        <label class="node-search">查找节点
+          <input class="input" type="search" v-model="search" placeholder="域名、监听端口或后端地址" />
+        </label>
+      </div>
+      <div class="actions" role="group" aria-label="拓扑操作">
       <button class="button" :aria-pressed="focus" @click="focus = !focus">
         聚焦活动</button
       ><button class="button" :aria-pressed="mask" @click="mask = !mask">
@@ -294,7 +300,20 @@ onBeforeUnmount(() => {
         @click="showFilter = !showFilter"
       >
         筛选</button
-      ><AppSelect
+      >
+      <AppSelect class="select layout-picker" aria-label="拓扑布局" menu-class="topology-layout-menu" v-model="layout">
+        <template #prefix><component :is="layoutIcons[layout]" :size="16" aria-hidden="true" /></template>
+        <template #option="{ item }">
+          <component :is="layoutIcons[item.value]" :size="16" aria-hidden="true" /><span>{{ item.label }}</span>
+        </template>
+        <option value="tree">链路树</option>
+        <option value="sankey">流量桑基</option>
+        <option value="list">列表</option></AppSelect
+      >
+      </div>
+    </div>
+    <div v-if="showFilter || sankey" class="tools">
+      <AppSelect
         class="select"
         v-if="showFilter"
         aria-label="筛选监听"
@@ -303,11 +322,6 @@ onBeforeUnmount(() => {
         <option v-for="l in listeners" :key="l" :value="l">
           {{ l }}
         </option></AppSelect
-      >
-      <AppSelect class="select" aria-label="拓扑布局" v-model="layout"
-        ><option value="tree">链路树</option>
-        <option value="sankey">流量桑基</option>
-        <option value="list">列表</option></AppSelect
       >
       <div
         v-if="sankey"
@@ -330,12 +344,6 @@ onBeforeUnmount(() => {
           响应流量
         </button>
       </div>
-      <input
-        class="input topology-search"
-        v-model="search"
-        aria-label="搜索拓扑"
-        placeholder="搜索域名、监听或后端"
-      />
     </div>
     <div v-if="replay" class="tools">
       <label
@@ -579,6 +587,12 @@ onBeforeUnmount(() => {
   </section>
 </template>
 <style scoped>
+.tools .layout-picker { display:inline-flex; align-items:center; gap:7px; min-width:116px; }
+:global(.topology-layout-menu) { padding:4px; border-color:var(--line); box-shadow:0 4px 14px rgb(0 0 0 / 10%); }
+:global(.topology-layout-menu .app-select-option) { gap:8px; padding:5px 8px; }
+:global(.topology-layout-menu .app-select-check) { order:1; margin-left:auto; text-align:right; }
+:global(.topology-layout-menu .selected:not(.highlighted)) { background:transparent; }
+
 .tools .select {
   width: auto;
   max-width: 100%;
@@ -596,15 +610,26 @@ onBeforeUnmount(() => {
   gap: 6px;
   flex-wrap: wrap;
 }
-.topology-search {
-  flex: 0 1 240px;
-  margin-inline-start: auto;
-  min-width: 0;
+.topology { container-type: inline-size; }
+.topology-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.fields, .actions { display:flex; align-items:center; gap:6px; }
+.fields { gap:18px; min-width:0; }
+.fields label { flex-wrap:nowrap; white-space:nowrap; min-width:0; }
+.visitor-field { flex:0 1 auto; }
+.visitor-field .select { max-width:14ch; min-width:0; }
+.node-search { flex:1 1 220px; max-width:310px; }
+.node-search input { flex:1; min-width:0; width:100%; }
+.actions { justify-content:flex-end; flex-wrap:wrap; }
+.actions > .button { width: 52px; }
+.actions > .button:first-child, .actions > .button:nth-child(3) { width: 78px; }
+.actions > .layout-picker { width:116px; }
+@container (max-width: 820px) {
+  .topology-toolbar { grid-template-columns:minmax(0,1fr); gap:6px; }
+  .node-search { max-width:none; }
 }
-@media (max-width: 650px) {
-  .topology-search {
-    flex-basis: 100%;
-  }
+@container (max-width: 480px) {
+  .fields { flex-wrap:wrap; gap:6px; }
+  .node-search { flex-basis:100%; }
 }
 .tools + .tools,
 .stats {
