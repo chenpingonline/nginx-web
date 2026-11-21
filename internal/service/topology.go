@@ -88,6 +88,7 @@ func (s *AppService) Topology() topologyView {
 		sort.Strings(site.Targets)
 		v.Sites = append(v.Sites, site)
 	}
+	attachCustomTopology(&v, s.topologyCustom.load(state.CustomConfigs))
 	return v
 }
 
@@ -126,17 +127,48 @@ func (s *AppService) MaintainTopology(ctx context.Context) {
 		if i < 0 {
 			continue
 		}
-		var hit metrics.TopologyHit
-		if json.Unmarshal(buf[i:n], &hit) != nil || hit.Rule == "default" || hit.Rule == "" {
+		var record struct {
+			metrics.TopologyHit
+			UpstreamAddress *string `json:"upstream"`
+			Scheme          string  `json:"scheme"`
+			Port            string  `json:"port"`
+		}
+		if json.Unmarshal(buf[i:n], &record) != nil || ((record.Rule == "default" || record.Rule == "") && record.Port == "") {
 			continue
 		}
-		// Internal inspection hops precede the final upstream group.
-		groups := strings.Split(hit.Upstream, " : ")
-		hit.Upstream = groups[len(groups)-1]
-		if strings.HasPrefix(hit.Upstream, "unix:") {
-			hit.Upstream = ""
+		hit := record.TopologyHit
+		if record.Port != "" {
+			hit.Listener = strings.ToUpper(record.Scheme) + " :" + record.Port
+		}
+		if record.UpstreamAddress != nil {
+			hit.Upstream, hit.Outcome = topologyDestination(*record.UpstreamAddress, s.paths.WAFSocket())
 		}
 		hit.Second = time.Now().Unix()
 		s.metrics.AddTopology(hit)
 	}
+}
+
+// Only the final group handles the outcome after an internal redirect.
+// Within it, Nginx lists retry attempts in order.
+func topologyDestination(raw, wafSocket string) (string, string) {
+	group := raw
+	if i := strings.LastIndex(raw, " : "); i >= 0 {
+		group = raw[i+3:]
+	}
+	var attempts []string
+	outcome := "no_upstream"
+	for _, addr := range strings.Split(group, ",") {
+		switch addr = strings.TrimSpace(addr); addr {
+		case "", "-":
+			continue
+		case "unix:" + wafSocket:
+			outcome = "waf_only"
+		default:
+			attempts = append(attempts, addr)
+		}
+	}
+	if len(attempts) > 0 {
+		return strings.Join(attempts, ", "), ""
+	}
+	return "", outcome
 }

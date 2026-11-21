@@ -25,18 +25,20 @@ const props = defineProps<{
   rule: ProxyRule | null;
   groups: RuleGroup[];
   initialGroup: string;
+  sourceFile?: string;
   settings: Settings;
   certificates: CertificateMeta[];
   upstreamPools: UpstreamPool[];
   rateLimitPolicies: RateLimitPolicy[];
   rateLimitsEnabled?: boolean;
   authProfiles: AuthProfile[];
+  manageAuthProfiles?: boolean;
   busy: boolean;
 }>();
 const emit = defineEmits<{
   save: [value: ProxyRuleInput, applyAfter: boolean];
   authProfilesChanged: [profiles: AuthProfile[]];
-  manageRateLimits: [createNew?: boolean];
+  manageRateLimits: [policy?: RateLimitPolicy];
 }>();
 const addRateLimitValue = "__add_rate_limit_policy__";
 const addAuthProfileValue = "__add_auth_profile__";
@@ -116,26 +118,37 @@ const inheritanceOptions: { key: GroupField; label: string }[] = [
   { key: "tls", label: "入口协议" }, { key: "listen_port", label: "监听端口" },
   { key: "certificate_id", label: "证书" }, { key: "http2", label: "HTTP/2" },
 ];
+const ruleGroup = computed({
+  get: () => form.group_id || "",
+  set: (id: string) => {
+    form.group_id = id;
+    if (!id) form.inherit_fields = [];
+  },
+});
 const selectedGroup = computed(() => props.groups.find(g => g.id === form.group_id));
 const hasExternalAuthentication = computed(() =>
   [form.root_location, ...form.locations.map(location => location.settings)]
     .some(settings => settings.basic_auth || Boolean(settings.auth_request?.trim())),
 );
+const selectedRateLimitPolicy = computed(() =>
+  props.rateLimitPolicies.find(policy => policy.id === form.rate_limit_policy_id),
+);
 const rateLimitPolicySelection = computed({
   get: () => form.rate_limit_policy_id,
   set: (value: string) => {
     if (value === addRateLimitValue) {
-      nextTick(() => emit("manageRateLimits", true));
+      nextTick(() => emit("manageRateLimits"));
       return;
     }
     form.rate_limit_policy_id = value;
   },
 });
+const selectedAuthProfile = computed(() => props.authProfiles.find(profile => profile.id === form.authentication.profile_id));
 const authProfileSelection = computed({
   get: () => form.authentication.profile_id,
   set: (value: string) => {
     if (value === addAuthProfileValue) {
-      nextTick(() => authProfileManager.value?.showNew());
+      nextTick(() => authProfileManager.value?.show());
       return;
     }
     form.authentication.profile_id = value;
@@ -153,7 +166,7 @@ function syncInherited() {
   if (inherits("http2")) form.http2 = group.http2;
   if (!form.tls) form.certificate_id = "";
 }
-watch(() => [form.inherit_fields, props.groups], syncInherited, { deep: true });
+watch(() => [form.group_id, form.inherit_fields, props.groups], syncInherited, { deep: true });
 watch(
   () => props.rule,
   (rule) => {
@@ -321,6 +334,7 @@ async function addLocation() {
     <div class="field">
       <label for="rule-name">名称</label
       ><input
+        :readonly="!!sourceFile"
         id="rule-name"
         v-model.trim="form.name"
         class="input"
@@ -329,9 +343,17 @@ async function addLocation() {
         autofocus
       />
     </div>
-    <label class="checkbox-row rule-enabled" title="启用或停用此规则">
+    <label v-if="!sourceFile" class="checkbox-row rule-enabled" title="启用或停用此规则">
       <input v-model="form.enabled" type="checkbox" aria-label="启用此规则" />启用
     </label>
+    </div>
+    <div class="field full">
+      <label for="rule-group">所属分组</label>
+      <input v-if="sourceFile" id="rule-group" class="input" value="自定义配置" readonly />
+      <AppSelect v-else id="rule-group" v-model="ruleGroup" class="select">
+        <option value="">未分组</option>
+        <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+      </AppSelect>
     </div>
       <div v-if="selectedGroup" class="field-help group-inheritance full">
         <span>继承分组设置（取消勾选可自定义）：</span>
@@ -525,13 +547,14 @@ async function addLocation() {
         <span v-if="hasExternalAuthentication && !form.authentication.enabled" class="field-help auth-mode-warning">根路径或自定义 Location 已配置外部认证，请先清除后再启用。</span>
       </div>
       <div class="field section-content section-right">
-        <label class="field-label-with-help">认证策略<HelpHint text="请从下拉菜单添加认证策略。" /></label>
+        <label class="field-label-with-help">认证策略</label>
         <div class="auth-policy-controls">
           <AppSelect id="auth-profile" v-model="authProfileSelection" class="select" aria-label="认证策略" :disabled="busy">
             <option value="">请选择认证策略</option>
             <option v-for="profile in authProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.users.filter(user => user.enabled).length }} 个用户</option>
-            <option :value="addAuthProfileValue" data-action>＋ 添加认证策略</option>
+            <option v-if="manageAuthProfiles !== false" :value="addAuthProfileValue" data-action>＋ 添加认证策略</option>
           </AppSelect>
+          <button v-if="manageAuthProfiles !== false && selectedAuthProfile" type="button" class="button ghost compact policy-edit" :disabled="busy" @click="authProfileManager?.show(selectedAuthProfile)">编辑策略</button>
           <AuthProfileManager ref="authProfileManager" :profiles="authProfiles" :disabled="busy" hide-trigger @changed="emit('authProfilesChanged', $event)" />
         </div>
 
@@ -629,6 +652,7 @@ async function addLocation() {
           </option>
           <option :value="addRateLimitValue" data-action>＋ 添加限流策略</option>
         </AppSelect>
+        <button v-if="selectedRateLimitPolicy" type="button" class="button ghost compact policy-edit" :disabled="busy" @click="emit('manageRateLimits', selectedRateLimitPolicy)">编辑策略</button>
       </div>
     </div>
     </section>
@@ -697,6 +721,7 @@ async function addLocation() {
 .redirect-port-control { display: flex; align-items: center; gap: 9px; color: var(--text-muted); font-size: 13px; }
 #proxy-rule-form .redirect-port-control .input { width: 110px; }
 .rate-limit-policy-controls { width: 33.333%; min-width: 220px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: center; }
+.policy-edit { justify-self: start; }
 .auth-policy-controls { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: center; }
 .auth-forward-row { display: grid; gap: 5px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface)); }
 .auth-forward-row .checkbox-row { min-height: auto; font-weight: 620; }

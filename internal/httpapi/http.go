@@ -531,6 +531,20 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		writeResult(w, http.StatusOK, revisions, err)
 	case strings.HasPrefix(apiPath, "/api/revisions/"):
 		a.handleRevision(w, r, strings.TrimPrefix(apiPath, "/api/revisions/"))
+	case apiPath == "/api/config-import/source-block" && r.Method == http.MethodDelete:
+		var src appservice.ImportSource
+		if !decodeJSON(w, r, &src) {
+			return
+		}
+		err := a.service.DeleteSourceBlock(src)
+		writeResult(w, http.StatusOK, map[string]bool{"deleted": err == nil}, err)
+	case apiPath == "/api/config-import/inspect" && r.Method == http.MethodPost:
+		var input appservice.ConfigImport
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		result, err := a.service.InspectSourceRule(input)
+		writeResult(w, http.StatusOK, result, err)
 	case (apiPath == "/api/config-import/preview" || apiPath == "/api/config-import/save") && r.Method == http.MethodPost:
 		var input appservice.ConfigImport
 		if !decodeJSON(w, r, &input) {

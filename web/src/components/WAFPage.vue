@@ -7,7 +7,8 @@ import AppSelect from "./AppSelect.vue";
 const props = defineProps<{ state: State; busy: boolean }>();
 const emit = defineEmits<{ refresh: []; apply: [] }>();
 interface Hit {
- body_limit?: boolean;
+  body_limit?: boolean;
+  partial_body?: boolean;
   time: string;
   site: string;
   host: string;
@@ -34,7 +35,7 @@ const visible = computed(() =>
 );
 const instances = computed(() => props.state.waf_instances ?? []);
 const dialog = ref<HTMLDialogElement>(),
-  draft = ref<WAFInstance>(),
+  draft = ref<WAFInstance & Required<Pick<WAFInstance, "body_limit_mib" | "body_limit_action" | "upload_sites">>>(),
   deleting = ref(false);
 const tab = ref<"basic"|"rules">("basic");
 function siteName(id: string) {
@@ -42,9 +43,13 @@ function siteName(id: string) {
 }
 async function edit(p?: WAFInstance, remove = false) {
   tab.value = "basic";
-  draft.value = p
-    ? { ...p, sites: [...(p.sites ?? [])], exclusions: { ...p.exclusions } }
-    : { id: "", name: "", mode: "detect", sites: [] };
+  draft.value = {
+    id: "", name: "", mode: "detect", ...p,
+    sites: [...(p?.sites ?? [])], exclusions: { ...p?.exclusions },
+    body_limit_mib: p?.body_limit_mib || 8,
+    body_limit_action: p?.body_limit_action || "reject",
+    upload_sites: [...(p?.upload_sites ?? [])],
+  };
   deleting.value = remove;
   error.value = "";
   await nextTick();
@@ -68,12 +73,18 @@ async function save() {
   }
   const exclusions = Object.fromEntries(Object.entries(p.exclusions ?? {})
     .filter(([site, ids]) => p.sites.includes(site) && ids.length));
+  if (!deleting.value && (!Number.isInteger(p.body_limit_mib) || !p.body_limit_mib || p.body_limit_mib < 1 || p.body_limit_mib > 128)) {
+    tab.value = "basic";
+    error.value = "请求体检查上限须为 1–128 MiB 的整数";
+    return;
+  }
+  const upload_sites = p.upload_sites?.filter(site => p.sites.includes(site));
   saving.value = true;
   error.value = "";
   try {
     await request("/waf/instances" + (p.id ? "/" + p.id : ""), {
       method: deleting.value ? "DELETE" : p.id ? "PUT" : "POST",
-      body: deleting.value ? undefined : jsonBody({ ...p, exclusions }),
+      body: deleting.value ? undefined : jsonBody({ ...p, exclusions, upload_sites }),
     });
     draft.value = undefined;
     emit("refresh");
@@ -193,9 +204,10 @@ onBeforeUnmount(() => {
             <td>{{ h.client }}</td>
             <td>{{ h.host }}</td>
             <td>{{ h.path }}</td>
-            <td>{{ [...h.rules,...(h.body_limit?["请求体限制"]:[])].join(", ") }}</td>
+            <td>{{ h.rules?.join(", ") || "—" }}</td>
             <td :class="{ blocked: h.blocked }">
-              {{ h.blocked ? "已拦截" : "仅记录" }}
+              <template v-if="h.body_limit">请求体超限 · {{ h.blocked ? "已拦截" : "已放行" }}<span v-if="h.partial_body">（已检查前段）</span></template>
+              <template v-else>{{ h.blocked ? "已拦截" : "仅记录" }}</template>
             </td>
           </tr>
           <tr v-if="!visible.length">
@@ -239,7 +251,7 @@ onBeforeUnmount(() => {
             <option value="block">拦截</option></AppSelect
           >
         </div>
-        <p v-if="draft.mode === 'block'">拦截模式会拒绝达到 8 MiB 的请求体。</p>
+
         <fieldset>
           <legend>关联站点</legend>
           <div v-for="r in available" :key="r.id" class="check">
@@ -251,7 +263,23 @@ onBeforeUnmount(() => {
             /><label :for="'waf-site-' + r.id">{{ siteName(r.id) }}</label>
           </div>
           <span v-if="!available.length">暂无可绑定的 HTTP 代理站点</span>
-        </fieldset></template
+        </fieldset>
+        <details class="body-policy">
+          <summary>请求体与上传</summary>
+          <label class="field-row"><span>检查上限</span><span class="limit-input"><input class="input" type="number" min="1" max="128" step="1" required v-model.number="draft.body_limit_mib" aria-label="请求体检查上限（MiB）" />MiB</span></label>
+          <div class="field-row"><strong>超限处理</strong><AppSelect v-model="draft.body_limit_action" class="select" aria-label="超限处理">
+            <option value="reject">拒绝请求（413）</option><option value="partial">仅检查前段</option>
+          </AppSelect></div>
+          <p class="policy-help">{{ draft.body_limit_action === 'partial' ? '超过上限的正文不再检查。' : draft.mode === 'detect' ? '仅检测模式下，超限请求会记录并放行。' : '超过上限的上传会被拒绝。' }}</p>
+          <fieldset><legend>WebDAV / 上传兼容</legend>
+            <p class="policy-help">为需要文件管理或上传的站点勾选，仍检查请求内容。</p>
+            <div v-for="id in draft.sites" :key="id" class="check">
+              <input :id="'upload-site-' + id" type="checkbox" :value="id" v-model="draft.upload_sites" />
+              <label :for="'upload-site-' + id">{{ siteName(id) }}</label>
+            </div>
+            <span v-if="!draft.sites.length">请先关联站点</span>
+          </fieldset>
+        </details></template
       >
       <p v-if="error" role="alert">{{ error }}</p>
       <footer>
@@ -371,6 +399,11 @@ footer {
 .waf-dialog h3 {
   margin: 0 0 14px;
 }
+.body-policy { margin-top: 12px; }
+.body-policy summary { cursor: pointer; font-weight: 600; }
+.limit-input { display: flex; align-items: center; gap: 8px; }
+.limit-input input { width: 7em; }
+.policy-help { margin: 6px 0; color: var(--text-muted); font-size: 13px; }
 .field-row {
   display: grid;
   grid-template-columns: 75px minmax(0, 1fr);

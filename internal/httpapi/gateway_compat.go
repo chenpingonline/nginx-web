@@ -43,7 +43,7 @@ func serveGatewayBootstrap(w http.ResponseWriter, prefix, cookiePrefix, target s
 
 // Localize only root URLs or absolute URLs belonging to this configured upstream.
 // Relative URLs retain their directory semantics; fragments and external origins stay intact.
-func gatewayResourceURL(value, prefix, target string) string {
+func gatewayResourceURL(value, prefix, target string, entry ...string) string {
 	if value == "" || strings.HasPrefix(value, "#") || strings.HasPrefix(value, "?") {
 		return value
 	}
@@ -57,7 +57,19 @@ func gatewayResourceURL(value, prefix, target string) string {
 		return value
 	}
 	if parsed.Host != "" {
-		if !strings.EqualFold(parsed.Host, upstream.Host) || (parsed.Scheme != "" && parsed.Scheme != upstream.Scheme) {
+		matchesOrigin := func(origin *url.URL) bool {
+			return strings.EqualFold(parsed.Host, origin.Host) && (parsed.Scheme == "" || parsed.Scheme == origin.Scheme)
+		}
+		if !matchesOrigin(upstream) {
+			if len(entry) == 0 {
+				return value
+			}
+			public, err := url.Parse(entry[0])
+			if err != nil || !matchesOrigin(public) {
+				return value
+			}
+		}
+		if parsed.User != nil {
 			return value
 		}
 
@@ -78,17 +90,17 @@ func gatewayResourceURL(value, prefix, target string) string {
 	return parsed.String()
 }
 
-func rewriteGatewayCSS(source, prefix, target string) string {
+func rewriteGatewayCSS(source, prefix, target string, entry ...string) string {
 	for _, pattern := range []*regexp.Regexp{gatewayCSSURL, gatewayCSSImport} {
 		source = pattern.ReplaceAllStringFunc(source, func(match string) string {
 			parts := pattern.FindStringSubmatch(match)
-			return parts[1] + gatewayResourceURL(parts[2], prefix, target)
+			return parts[1] + gatewayResourceURL(parts[2], prefix, target, entry...)
 		})
 	}
 	return source
 }
 
-func rewriteGatewayJS(source, prefix, target string) string {
+func rewriteGatewayJS(source, prefix, target string, entry ...string) string {
 	for _, pattern := range []*regexp.Regexp{gatewayJSLocation, gatewayJSModule} {
 		matches := pattern.FindAllStringSubmatchIndex(source, -1)
 		if len(matches) == 0 {
@@ -106,7 +118,7 @@ func rewriteGatewayJS(source, prefix, target string) string {
 				continue
 			}
 			out.WriteString(source[last:m[0]])
-			out.WriteString(parts[1] + parts[2] + gatewayResourceURL(parts[3], prefix, target) + parts[4])
+			out.WriteString(parts[1] + parts[2] + gatewayResourceURL(parts[3], prefix, target, entry...) + parts[4])
 			last = m[1]
 		}
 		out.WriteString(source[last:])
@@ -116,7 +128,7 @@ func rewriteGatewayJS(source, prefix, target string) string {
 	return source
 }
 
-func rewriteGatewayResponse(response *http.Response, prefix, target string) error {
+func rewriteGatewayResponse(response *http.Response, prefix, target string, entry ...string) error {
 	kind := strings.ToLower(strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0]))
 	switch kind {
 	case "application/x-javascript", "text/ecmascript", "application/ecmascript":
@@ -172,11 +184,11 @@ func rewriteGatewayResponse(response *http.Response, prefix, target string) erro
 	text := string(raw)
 	switch kind {
 	case "text/html":
-		text, err = rewriteGatewayHTML(text, prefix, target)
+		text, err = rewriteGatewayHTML(text, prefix, target, entry...)
 	case "text/css":
-		text = rewriteGatewayCSS(text, prefix, target)
+		text = rewriteGatewayCSS(text, prefix, target, entry...)
 	default:
-		text = rewriteGatewayJS(text, prefix, target)
+		text = rewriteGatewayJS(text, prefix, target, entry...)
 	}
 	if err != nil {
 		return err
@@ -193,7 +205,7 @@ func rewriteGatewayResponse(response *http.Response, prefix, target string) erro
 	return nil
 }
 
-func rewriteGatewayHTML(source, prefix, target string) (string, error) {
+func rewriteGatewayHTML(source, prefix, target string, entry ...string) (string, error) {
 	doc, err := html.Parse(strings.NewReader(source))
 	if err != nil {
 		return "", err
@@ -210,9 +222,9 @@ func rewriteGatewayHTML(source, prefix, target string) (string, error) {
 			for i, attr := range node.Attr {
 				switch attr.Key {
 				case "src", "href", "action", "poster", "data", "formaction":
-					node.Attr[i].Val = gatewayResourceURL(attr.Val, prefix, target)
+					node.Attr[i].Val = gatewayResourceURL(attr.Val, prefix, target, entry...)
 				case "style":
-					node.Attr[i].Val = rewriteGatewayCSS(attr.Val, prefix, target)
+					node.Attr[i].Val = rewriteGatewayCSS(attr.Val, prefix, target, entry...)
 				case "srcset":
 					// Data URLs contain commas; leave those lists untouched.
 					if !strings.Contains(strings.ToLower(attr.Val), "data:") {
@@ -220,7 +232,7 @@ func rewriteGatewayHTML(source, prefix, target string) (string, error) {
 						for j, candidate := range candidates {
 							parts := strings.Fields(candidate)
 							if len(parts) > 0 {
-								parts[0] = gatewayResourceURL(parts[0], prefix, target)
+								parts[0] = gatewayResourceURL(parts[0], prefix, target, entry...)
 								candidates[j] = strings.Join(parts, " ")
 							}
 						}
@@ -235,7 +247,7 @@ func rewriteGatewayHTML(source, prefix, target string) (string, error) {
 						delay, location, found := strings.Cut(attr.Val, ";")
 						key, dest, hasURL := strings.Cut(strings.TrimSpace(location), "=")
 						if found && hasURL && strings.EqualFold(key, "url") {
-							node.Attr[i].Val = delay + ";url=" + gatewayResourceURL(strings.Trim(dest, "\"'"), prefix, target)
+							node.Attr[i].Val = delay + ";url=" + gatewayResourceURL(strings.Trim(dest, "\"'"), prefix, target, entry...)
 						}
 					}
 				}
@@ -267,9 +279,9 @@ func rewriteGatewayHTML(source, prefix, target string) (string, error) {
 						continue
 					}
 					if node.Data == "style" {
-						child.Data = rewriteGatewayCSS(child.Data, prefix, target)
+						child.Data = rewriteGatewayCSS(child.Data, prefix, target, entry...)
 					} else if scriptType == "" || scriptType == "module" || scriptType == "text/javascript" || scriptType == "application/javascript" {
-						child.Data = rewriteGatewayJS(child.Data, prefix, target)
+						child.Data = rewriteGatewayJS(child.Data, prefix, target, entry...)
 					}
 				}
 			}

@@ -47,3 +47,32 @@ func TestImportPreviewCommitAndLocationConflict(t *testing.T) {
 		t.Fatal("duplicate location accepted")
 	}
 }
+
+func TestSourceRuleReplacementIsAtomic(t *testing.T) {
+	s := testService(t)
+	const prefix = "# 保留文件注释\n"
+	const block = "server { listen 19187; server_name demo.test; location / { proxy_pass http://127.0.0.1:8123; } }"
+	const suffix = "\nserver { listen 19188; return 204; }\n"
+	file := domain.CustomConfig{Name: "custom-sites.conf", Content: prefix + block + suffix}
+	if _, err := s.SaveCustomConfig("", file); err != nil {
+		t.Fatal(err)
+	}
+	r := ProxyRule{ID: "abcdef123456", Name: "demo", Domains: []string{"demo.test"}, ListenPort: 19187, UpstreamHost: "127.0.0.1", UpstreamPort: 8123, Enabled: true}
+	input := ConfigImport{Rules: []ProxyRule{r}, Source: &ImportSource{Name: file.Name, Expected: file.Content, Start: len(prefix), End: len(prefix) + len(block)}}
+	preview, err := s.ImportConfig(input, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Expected = preview
+	input.Source.Expected += " "
+	if _, err := s.ImportConfig(input, true); err == nil || len(s.State().Rules) != 0 || s.State().CustomConfigs[0] != file {
+		t.Fatal("stale source was converted")
+	}
+	input.Source.Expected = file.Content
+	if _, err := s.ImportConfig(input, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.State().Rules) != 1 || s.State().CustomConfigs[0].Content != prefix+suffix {
+		t.Fatal("conversion changed another block")
+	}
+}

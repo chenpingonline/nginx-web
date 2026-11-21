@@ -4,6 +4,8 @@ import {
   importBlocks,
   parseConfig,
   sourceEntries,
+  sourceBlock,
+  updateSourceBlock,
 } from "../src/nginxConfig.ts";
 
 test("preserve line offsets, skip maps, and handle escaped or quoted delimiters", () => {
@@ -42,7 +44,7 @@ test("edit only selected server parameters and preserve surrounding source", asy
   const { parameterGroups, editParameters } = await import("../src/nginxConfig.ts");
   const content = '# test\nserver { listen 9090 ssl; server_name a b; location / { proxy_set_header X "a;b"; proxy_pass http://old; # note\ninclude custom; } }\nserver { location / { proxy_pass http://old; } }\n';
   const groups = parameterGroups(sourceEntries([{name: "custom-test.conf", content}])[0]);
-  assert.deepEqual(groups.map(g => g.title), ["server", "location /"]);
+  assert.deepEqual(groups.map(g => g.title), ["server", "server › location /"]);
   const fields = groups.flatMap(g => g.fields);
   assert.equal(editParameters(content, fields), content);
   const target = fields.find(f => f.original === "http://old");
@@ -51,5 +53,90 @@ test("edit only selected server parameters and preserve surrounding source", asy
   for (const value of ["", "foo; return 200", "foo # comment", "foo {}"]) {
     target.value = value;
     assert.throws(() => editParameters(content, fields));
+  }
+});
+
+test("whole-file form preserves scopes, data rows, comments and module directives", async () => {
+  const { parameterGroups, editParameters } = await import("../src/nginxConfig.ts");
+  const content = [
+    "map $host $target {",
+    '  "a b" backend; # routing',
+    "}",
+    "upstream backend { server 127.0.0.1:8011 weight=3; keepalive 8; }",
+    "server { location / { if ($arg_test) { custom_module foo",
+    "  # keep this comment",
+    "  bar; } } }",
+    "server { return 204; }",
+  ].join("\n");
+  const fields = parameterGroups({file: { name: "custom-many.conf", content }}).flatMap(g => g.fields);
+  const row = fields.find(f => f.label === "映射条目");
+  assert.equal(row.original, '"a b" backend');
+  row.value = '"c d" backend';
+  fields.find(f => f.directive === "keepalive").value = "12";
+  const custom = fields.find(f => f.directive === "custom_module");
+  custom.value = custom.original.replace("bar", "baz");
+  assert.equal(editParameters(content, fields), content.replace('"a b"', '"c d"').replace("keepalive 8", "keepalive 12").replace("bar;", "baz;"));
+  custom.value = "foo;\nadd_header X bad";
+  assert.throws(() => editParameters(content, fields));
+});
+
+test("import dual-stack SPA with per-path proxy headers, caching and timeouts", () => {
+  const config = `server {
+    listen 18959;
+    listen [::]:18959;
+    server_name 192.168.31.95;
+    root /vol1/test/points-admin;
+    index index.html;
+    client_max_body_size 55m;
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+    location /files/ {
+        proxy_pass http://127.0.0.1:18081;
+        expires 30m;
+        add_header Cache-Control "public";
+    }
+}
+`;
+  const rule = importBlocks(config, "").rules[0];
+  assert.equal(rule.listen_type, "dual");
+  assert.equal(rule.listen_port, 18959);
+  assert.equal(rule.client_max_body_mb, 55);
+  assert.equal(rule.root_location.backend_type, "static");
+  assert.equal(rule.root_location.static_path, "/vol1/test/points-admin");
+  assert.deepEqual(rule.root_location.index_files, ["index.html"]);
+  assert.deepEqual(rule.root_location.try_files, ["$uri", "$uri/", "/index.html"]);
+  const [api, files] = rule.locations.map(location => location.settings);
+  assert.equal(api.explicit_proxy_headers, true);
+  assert.equal(api.request_headers.find(h => h.name === "Host").value, "$host");
+  assert.equal(api.proxy_http_version, "1.1");
+  assert.equal(api.read_timeout_seconds, 60);
+  assert.equal(files.expires, "30m");
+  assert.deepEqual(files.response_headers, [{name: "Cache-Control", value: "public", always: false}]);
+  assert.throws(() => importBlocks(config.replace("[::]:18959", "[::]:19000"), ""), /listen/);
+  assert.throws(() => importBlocks(config.replace("try_files", "unsupported_option"), ""), /unsupported_option/);
+});
+
+test("editing a custom rule replaces only its UTF-8 block and retains its tracking identity", () => {
+  const prefix = "# 另一个站点\nserver { listen 9090; }\n";
+  const suffix = "\n# 结束\n";
+  const rendered = 'server {\n    set $fnproxy_rule_id "new";\n    listen 9092;\n}\n';
+  for (const tracking of ['', '    set $fnproxy_rule_id "original";\n']) {
+    const original = "server {\n" + tracking + "    listen 9091;\n}";
+    const file = { name: "custom.conf", content: prefix + original + suffix };
+    const entry = sourceEntries([file])[1];
+    const { source } = sourceBlock(entry);
+    const { content, end } = updateSourceBlock(source, rendered);
+    assert.equal(content, prefix + original.replace("9091", "9092") + suffix);
+    assert.equal(end, Buffer.byteLength(content.slice(0, -suffix.length)));
   }
 });

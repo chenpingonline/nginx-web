@@ -672,7 +672,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 	logFormat += `
     map $request_id $fnproxy_waf_checked { default 0; }
     map $host $fnproxy_rule_id { default "default"; }
-    log_format fnproxy_topology escape=json '{"rule":"$fnproxy_rule_id","client":"$remote_addr","upstream":"$upstream_addr","bytes":$body_bytes_sent}';
+    log_format fnproxy_topology escape=json '{"rule":"$fnproxy_rule_id","server":"$server_name","scheme":"$scheme","port":"$server_port","address":"$server_addr","client":"$remote_addr","upstream":"$upstream_addr","bytes":$body_bytes_sent}';
     log_format fnproxy_metrics escape=json '{"time":$msec,"rule":"$fnproxy_rule_id","method":"$request_method","uri":"$uri","status":$status,"bytes":$body_bytes_sent,"request_time":$request_time,"upstream":"$upstream_addr","upstream_status":"$upstream_status","upstream_header_time":"$upstream_header_time","upstream_time":"$upstream_response_time","limit_req_status":"$limit_req_status","limit_conn_status":"$limit_conn_status","limit_policy":"$fnproxy_limit_policy"}';`
 	// Embed a bounded snapshot in the applied config so later edits or deletions
 	// cannot rewrite the meaning of historical limit events.
@@ -1406,22 +1406,28 @@ func renderHTTPBackend(settings domain.LocationSettings, scheme string) string {
 }
 
 func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, settings domain.LocationSettings, cacheID string) {
-	builder.WriteString("        proxy_http_version 1.1;\n")
-	if rule.PreserveHost {
-		builder.WriteString("        proxy_set_header Host $fnproxy_client_host;\n")
-	} else {
-		builder.WriteString("        proxy_set_header Host $proxy_host;\n")
+	version := settings.ProxyHTTPVersion
+	if version == "" {
+		version = "1.1"
 	}
-	builder.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
-	builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
-	builder.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
-	builder.WriteString("        proxy_set_header X-Forwarded-Host $fnproxy_client_host;\n")
-	builder.WriteString("        proxy_set_header X-Forwarded-Port $server_port;\n")
-	if rule.WebSocket {
-		builder.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
-		builder.WriteString("        proxy_set_header Connection $connection_upgrade;\n")
-	} else {
-		builder.WriteString("        proxy_set_header Connection \"\";\n")
+	fmt.Fprintf(builder, "        proxy_http_version %s;\n", version)
+	if !settings.ExplicitProxyHeaders {
+		if rule.PreserveHost {
+			builder.WriteString("        proxy_set_header Host $fnproxy_client_host;\n")
+		} else {
+			builder.WriteString("        proxy_set_header Host $proxy_host;\n")
+		}
+		builder.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
+		builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+		builder.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+		builder.WriteString("        proxy_set_header X-Forwarded-Host $fnproxy_client_host;\n")
+		builder.WriteString("        proxy_set_header X-Forwarded-Port $server_port;\n")
+		if rule.WebSocket {
+			builder.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
+			builder.WriteString("        proxy_set_header Connection $connection_upgrade;\n")
+		} else {
+			builder.WriteString("        proxy_set_header Connection \"\";\n")
+		}
 	}
 	for _, header := range settings.RequestHeaders {
 		fmt.Fprintf(builder, "        proxy_set_header %s %s;\n", header.Name, nginxDirectiveQuote(header.Value))

@@ -2,6 +2,7 @@ package nginx
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -45,6 +46,18 @@ func (m *Manager) writeInspectorProxy(b *strings.Builder, p domain.WAFInstance, 
 			values[i] = strconv.Itoa(id)
 		}
 		mode += ":" + strings.Join(values, ",")
+	}
+	// Older installed configs already overwrite this header. Never trust a new client-supplied policy header.
+	if p.BodyLimitMiB != 0 || p.BodyLimitAction != "" || slices.Contains(p.UploadSites, r.ID) {
+		limit := p.BodyLimitMiB
+		if limit == 0 {
+			limit = domain.DefaultWAFBodyMiB
+		}
+		action := p.BodyLimitAction
+		if action == "" {
+			action = "reject"
+		}
+		mode += fmt.Sprintf("|%d|%s|%t", limit, action, slices.Contains(p.UploadSites, r.ID))
 	}
 	fmt.Fprintf(b, `        auth_request off;
         proxy_request_buffering on;

@@ -5,6 +5,7 @@ defineProps<{
     | "http"
     | "stream"
     | "upstreams"
+    | "auth"
     | "rate-limit"
     | "certificate"
     | "logs"
@@ -65,6 +66,10 @@ defineProps<{
       <path d="M9 6h6.5M9 12h6.5M9 18h6.5" />
     </g>
 
+    <g v-else-if="name === 'auth'">
+      <rect x="4.5" y="10" width="15" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" />
+    </g>
     <g v-else-if="name === 'rate-limit'">
       <path d="M3.5 18a8.5 8.5 0 1 1 17 0H3.5Z" />
       <path d="m12 12 4.6-4.6" />

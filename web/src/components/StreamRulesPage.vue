@@ -30,6 +30,7 @@ const props = defineProps<{
   dirty: boolean;
 }>();
 const emit = defineEmits<{
+  copy: [value: string, label: string];
   save: [value: StreamRuleInput, id: string];
   remove: [rule: StreamRule];
   toggle: [rule: StreamRule, enabled: boolean];
@@ -246,7 +247,7 @@ watch(
       <p>{{ rules.length ? "调整关键词、协议或启用状态后重试。" : "创建独立监听端口并转发到单节点服务或 Stream 转发服务组。" }}</p>
     </div>
   </article>
-  <ConfigSources :entries="visibleSources" @saved="emit('sourceSaved')" @edit="emit('source',$event)" />
+  <ConfigSources @copy="(value, label) => emit('copy', value, label)" :entries="visibleSources" @saved="emit('sourceSaved')" @edit="emit('source',$event)" />
   <Teleport to="body">
     <div v-if="open" class="modal-backdrop" @mousedown.self="open = false">
       <section

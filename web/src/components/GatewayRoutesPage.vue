@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from "vue";
-import { PhArrowClockwise, PhPlusCircle, PhArrowSquareOut } from "@phosphor-icons/vue";
+import { PhArrowClockwise, PhPlusCircle, PhArrowSquareOut, PhCaretRight } from "@phosphor-icons/vue";
 import { request, jsonBody, errorMessage } from "../api";
 import AppSelect from "./AppSelect.vue";
 import type { GatewayRoute } from "../types";
@@ -12,9 +12,27 @@ type DiscoveredApp = { app: string; entry: string; name: string; path: string; t
 const discovering = ref(false), discoveryError = ref(""), search = ref("");
 const discovery = ref<{ entries: DiscoveredApp[]; unreadable: number }>({ entries: [], unreadable: 0 });
 const matches = (...values: string[]) => values.join(" ").toLowerCase().includes(search.value.trim().toLowerCase());
-const visibleRoutes = computed(() => props.routes.filter(r => matches(r.name, r.path, r.target)));
+const accessLabels = { builtin: "原生入口", original: "原链接", adapted: "自动修正" } as const;
+type AccessType = keyof typeof accessLabels;
+const typeFilter = ref<AccessType | "all">("all");
+const filtering = computed(() => Boolean(search.value.trim()) || typeFilter.value !== "all");
+const routeType = (route: GatewayRoute): AccessType => route.compatibility ? "adapted" : "original";
+const appType = (app: DiscoveredApp): AccessType => {
+  if (app.gateway_url) return "builtin";
+  return app.recommended_mode === "native" ? "original" : "adapted";
+};
+const matchesType = (type: AccessType) => typeFilter.value === "all" || typeFilter.value === type;
+const visibleRoutes = computed(() => props.routes.filter(r => matchesType(routeType(r)) && matches(r.name, r.path, r.target)));
 const discoveredApps = computed(() => discovery.value.entries.filter(item =>
-  !item.existing && matches(item.name, item.app, item.path, item.target, item.gateway_url || "")));
+  !item.existing && matchesType(appType(item)) && matches(item.name, item.app, item.path, item.target, item.gateway_url || "")));
+const groups = computed(() => [
+  { id: "connected", title: "已接入", routes: visibleRoutes.value, apps: discoveredApps.value.filter(item => item.gateway_url) },
+  { id: "pending", title: "待接入", routes: [], apps: discoveredApps.value.filter(item => !item.gateway_url) },
+] as const);
+const expanded = reactive({ connected: true, pending: false });
+const searchExpanded = reactive({ connected: true, pending: true });
+watch([search, typeFilter], () => { searchExpanded.connected = true; searchExpanded.pending = true; });
+const expansion = computed(() => filtering.value ? searchExpanded : expanded);
 let discoveryController: AbortController | undefined;
 async function discover() {
   discoveryController?.abort();
@@ -37,9 +55,9 @@ function useDiscovered(item: DiscoveredApp) {
 function close() { if (!saving.value) { cancelProbe(); open.value = false; error.value = ""; } }
 const blank = (): GatewayRoute => ({ id: "", name: "", path: "", target: "http://127.0.0.1:8080", enabled: true, trust_first_certificate: false, tls_fingerprint: "", tls_trust_target: "", compatibility: "subpath" });
 const form = reactive(blank());
-const compatibilityMode = computed<"" | "subpath">({
-  get: () => form.compatibility === "ikuai-v4" || form.compatibility === "subpath" ? "subpath" : "",
-  set: value => { form.compatibility = value; },
+const autoFixLinks = computed({
+  get: () => form.compatibility === "ikuai-v4" || form.compatibility === "subpath",
+  set: (enabled: boolean) => { form.compatibility = enabled ? "subpath" : ""; },
 });
 type ProbeResult = { code: string; message: string; target: string; http_status?: number; can_trust: boolean; certificate?: { subject: string; issuer: string; fingerprint: string; not_before: string; not_after: string; names: string[] } };
 const probing = ref(false), probeResult = ref<ProbeResult | null>(null);
@@ -71,7 +89,6 @@ function trustCertificate() {
 }
 function clearTrust() { cancelProbe(); form.tls_fingerprint = ""; form.tls_trust_target = ""; probeResult.value = null; }
 function certificateDate(value: string) { return new Date(value).toLocaleString("zh-CN"); }
-const compatibilityLabel = (route: GatewayRoute) => route.compatibility ? "由网关调整路径" : "保留原路径";
 const entry = (path: string) => `${location.origin}/app/nginx-web/proxy/${path}/`;
 function show(route?: GatewayRoute) {
   cancelProbe();
@@ -117,34 +134,49 @@ async function remove(route: GatewayRoute) {
 <template>
   <div class="toolbar compact-rule-toolbar">
     <input v-model="search" class="input gateway-search" type="search" aria-label="搜索网关服务" placeholder="搜索服务名称、路径或端口" />
+    <AppSelect v-model="typeFilter" class="select gateway-type-filter" aria-label="接入类型">
+      <option value="all">全部接入类型</option>
+      <option v-for="(label, type) in accessLabels" :key="type" :value="type">{{ label }}</option>
+    </AppSelect>
     <span class="spacer"></span>
     <button class="button ghost" :disabled="busy || saving || discovering" @click="refresh"><PhArrowClockwise :size="16" aria-hidden="true" />{{ discovering ? '识别中…' : '刷新' }}</button>
     <button class="button primary" :disabled="busy || saving" @click="show()"><PhPlusCircle :size="17" aria-hidden="true" />添加网关服务</button>
   </div>
   <p class="gateway-intro">管理员可通过 fnConnect 访问内网服务。<span v-if="discovery.unreadable">{{ discovery.unreadable }} 个应用未能识别，可手动添加。</span></p>
   <p v-if="actionError || discoveryError" class="notice danger" role="alert">{{ actionError || discoveryError }}</p>
-  <article class="card">
-    <div v-if="visibleRoutes.length || discoveredApps.length" class="table-wrap">
-      <table class="table"><thead><tr><th>服务名称</th><th>网关路径</th><th>转发地址</th><th>配置</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="route in visibleRoutes" :key="route.id">
-          <td class="rule-name"><div class="gateway-name-toggle">
-            <input :id="'gateway-enabled-' + route.id" type="checkbox" :checked="route.enabled" :disabled="busy || saving" :aria-label="'启用 ' + route.name" @change="toggleEnabled(route, $event)" />
-            <label :for="'gateway-enabled-' + route.id">{{ route.name }}</label>
-          </div></td>
+  <template v-for="group in groups" :key="group.id">
+    <article v-if="group.routes.length || group.apps.length" class="card gateway-group">
+      <h3><button type="button" class="gateway-group-toggle" :aria-expanded="expansion[group.id]"
+        :aria-controls="'gateway-' + group.id" @click="expansion[group.id] = !expansion[group.id]">
+        <PhCaretRight aria-hidden="true" /><span>{{ group.title }}<span class="gateway-group-count">（{{ group.routes.length + group.apps.length }}）</span></span>
+      </button></h3>
+      <div v-show="expansion[group.id]" :id="'gateway-' + group.id" class="table-wrap">
+      <table class="table"><thead><tr><th>服务名称</th><th>网关路径</th><th>转发地址</th><th>接入类型</th><th class="gateway-actions-heading">操作</th></tr></thead>
+        <tbody><tr v-for="route in group.routes" :key="route.id">
+          <td class="rule-name">{{ route.name }}</td>
           <td><a class="gateway-link" :href="entry(route.path)" target="_blank" rel="noopener noreferrer">/proxy/{{ route.path }}/ <PhArrowSquareOut :size="14" aria-hidden="true" /></a></td>
-          <td>{{ route.target }}</td><td><span class="badge" :class="route.enabled ? 'success' : ''">{{ route.enabled ? '启用' : '停用' }}</span><div class="help-text">{{ compatibilityLabel(route) }}</div></td>
-          <td><div class="table-actions"><button class="button ghost small" :disabled="busy || saving" @click="show(route)">编辑</button><button class="button danger-ghost small" :disabled="busy || saving" @click="remove(route)">删除</button></div></td>
+          <td>{{ route.target }}</td><td>{{ accessLabels[routeType(route)] }}</td>
+          <td><div class="table-actions gateway-actions">
+            <label class="switch" :title="route.enabled ? '停用网关入口' : '启用网关入口'">
+              <input type="checkbox" role="switch" :checked="route.enabled" :disabled="busy || saving"
+                :aria-label="'启用 ' + route.name" @change="toggleEnabled(route, $event)" />
+              <span aria-hidden="true"></span>
+            </label>
+            <button class="button ghost small" :disabled="busy || saving" @click="show(route)">编辑</button><button class="button danger-ghost small" :disabled="busy || saving" @click="remove(route)">删除</button></div></td>
         </tr>
-        <tr v-for="item in discoveredApps" :key="item.app + ':' + item.entry">
+        <tr v-for="item in group.apps" :key="item.app + ':' + item.entry">
           <td class="rule-name">{{ item.name }}</td>
           <td><a v-if="item.gateway_url" class="gateway-link" :href="item.gateway_url" target="_blank" rel="noopener noreferrer">{{ item.gateway_url }} <PhArrowSquareOut :size="14" aria-hidden="true" /></a><span v-else>/proxy/{{ item.path }}/</span></td>
           <td>{{ item.target || (item.gateway_url ? '—' : '端口待填写') }}</td>
-          <td><span class="badge">{{ item.gateway_url ? '原生入口' : '待接入' }}</span><div v-if="!item.gateway_url" class="help-text">{{ item.recommended_mode === 'native' ? '保留原路径' : '由网关调整路径' }}</div></td>
-          <td><div v-if="!item.gateway_url" class="table-actions"><button class="button ghost small" :disabled="busy || saving" @click="useDiscovered(item)">{{ item.target ? '接入' : '填写端口' }}</button></div></td>
+          <td>{{ accessLabels[appType(item)] }}</td>
+          <td><div v-if="!item.gateway_url" class="table-actions gateway-actions"><button class="button ghost small" :disabled="busy || saving" @click="useDiscovered(item)">{{ item.target ? '接入' : '填写端口' }}</button></div></td>
         </tr></tbody>
       </table>
     </div>
-    <div v-else class="empty-state"><h3>{{ search ? "没有匹配的服务" : discovering ? "正在识别已安装应用…" : "还没有网关服务" }}</h3><p v-if="!search && !discovering">为可信的 HTTP 服务添加路径，通过飞牛域名统一访问。</p></div>
+    </article>
+  </template>
+  <article v-if="!visibleRoutes.length && !discoveredApps.length" class="card">
+    <div class="empty-state"><h3>{{ filtering ? "没有匹配的服务" : discovering ? "正在识别已安装应用…" : "还没有网关服务" }}</h3><p v-if="!filtering && !discovering">为可信的 HTTP 服务添加路径，通过飞牛域名统一访问。</p></div>
   </article>
   <Teleport to="body">
     <div v-if="open" class="modal-backdrop" @mousedown.self="close" @keydown.esc.stop="close">
@@ -158,7 +190,16 @@ async function remove(route: GatewayRoute) {
           <div class="field full"><label for="gateway-name">服务名称</label><input id="gateway-name" v-model.trim="form.name" class="input" required maxlength="80" placeholder="例如：音乐服务" /></div>
           <div class="field full"><label for="gateway-path">服务路径</label><input id="gateway-path" v-model.trim="form.path" class="input" required pattern="[a-z0-9][a-z0-9\-]{0,47}" title="使用小写字母、数字或连字符，以字母或数字开头" maxlength="48" placeholder="例如：music" /><small v-if="form.path" class="field-help gateway-preview">访问路径 · /app/nginx-web/proxy/{{ form.path }}/</small></div>
           <div class="field full"><label for="gateway-target">转发地址</label><input id="gateway-target" v-model.trim="form.target" @input="form.trust_first_certificate = false" class="input" type="url" required placeholder="http://127.0.0.1:4533" /><small class="field-help">填写可信设备的 HTTP 或 HTTPS 地址。</small></div>
-          <div class="field full"><label for="gateway-compatibility">页面适配</label><AppSelect id="gateway-compatibility" v-model="compatibilityMode" class="select"><option value="subpath">由网关调整路径</option><option value="">保留原路径</option></AppSelect><small class="field-help">{{ compatibilityMode ? '适合默认从根路径打开的服务。' : '适合已支持子路径的服务。' }}</small></div>
+          <div class="field full gateway-link-field">
+            <label for="gateway-auto-fix-links">自动修正网页链接</label>
+            <div class="gateway-link-setting">
+              <label class="switch">
+                <input id="gateway-auto-fix-links" v-model="autoFixLinks" type="checkbox" role="switch" aria-describedby="gateway-auto-fix-help" />
+                <span aria-hidden="true"></span>
+              </label>
+              <small id="gateway-auto-fix-help">已在服务里配置网关访问地址时，可以关闭。</small>
+            </div>
+          </div>
           <div v-if="form.target.toLowerCase().startsWith('https://') && !form.tls_fingerprint" class="full gateway-first-trust">
             <input id="gateway-first-trust" v-model="form.trust_first_certificate" type="checkbox" />
             <label for="gateway-first-trust">首次访问时自动信任此设备的证书</label>
@@ -181,15 +222,26 @@ async function remove(route: GatewayRoute) {
 </template>
 
 <style scoped>
+.gateway-link-setting { align-self: center; display: flex; align-items: center; gap: 10px; }
+.gateway-link-setting .switch { flex: none; cursor: pointer; }
+.gateway-link-setting input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gateway-link-setting small { color: var(--muted); }
 .gateway-first-trust { display: flex; align-items: center; gap: 8px; }
 .gateway-first-trust input { margin: 0; }
+.gateway-group + .gateway-group { margin-top: 10px; }
+.gateway-group h3 { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; }
+.gateway-group-count { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.gateway-group-toggle { width: 100%; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.gateway-group-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 .gateway-intro { margin: 8px 0 12px; color: var(--text-muted); }
 .gateway-intro span { margin-inline-start: .5em; }
 .gateway-preview { overflow-wrap: anywhere; }
-.gateway-name-toggle { display: inline-flex; align-items: center; gap: 8px; }
-.gateway-name-toggle input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
-.gateway-name-toggle label { cursor: pointer; }
+.gateway-actions-heading { width: 1%; }
+.gateway-actions { align-items: center; justify-content: flex-start; gap: 8px; white-space: nowrap; }
+.gateway-actions .switch { flex: none; cursor: pointer; }
+.gateway-actions .switch:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 20px; }
 .gateway-link:any-link { color: LinkText; }
+.gateway-type-filter { width: 150px; max-width: 100%; }
 .gateway-search { width: min(100%, 300px); }
 .gateway-probe-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .gateway-probe-status { margin: 8px 0; color: var(--text-muted); font-size: 13px; line-height: 1.4; }
@@ -201,5 +253,10 @@ async function remove(route: GatewayRoute) {
 .gateway-certificate dd { margin: 0; }
 .gateway-certificate small { display: block; margin-top: 8px; }
 code { overflow-wrap: anywhere; font-size: 12px; }
+@media (max-width: 520px) {
+  #gateway-form .gateway-link-field { display: grid; grid-template-columns: max-content 1fr; align-items: center; }
+  .gateway-link-setting { display: contents; }
+  .gateway-link-setting small { grid-column: 1 / -1; }
+}
 @media (max-width: 600px) { .gateway-certificate dl > div { grid-template-columns: 1fr; gap: 4px; } }
 </style>

@@ -282,6 +282,12 @@ async function directoryAction(action: "select" | "authorize") {
             <div><strong>请求 Header</strong><span>控制转发给后端的请求头</span></div>
             <button type="button" class="button compact header-add-button" @click="addHeader('request_headers')">添加请求 Header</button>
           </header>
+          <template v-if="model.backend_type === 'proxy'">
+            <div class="field"><label :for="timeoutId+'-http-version'">转发 HTTP 版本</label>
+              <AppSelect :id="timeoutId+'-http-version'" :model-value="model.proxy_http_version || '1.1'" @update:model-value="model.proxy_http_version = $event" class="select"><option value="1.1">1.1</option><option value="1.0">1.0</option></AppSelect>
+            </div>
+            <div class="checkbox-row"><input :id="timeoutId+'-explicit-headers'" v-model="model.explicit_proxy_headers" type="checkbox" /><label :for="timeoutId+'-explicit-headers'">仅使用本路径配置的代理请求头</label></div>
+          </template>
           <p v-if="model.request_headers.length === 0" class="editor-empty">未配置请求 Header。</p>
           <div v-for="(item, index) in model.request_headers" :key="`req-${index}`" class="inline-editor header-editor-row">
             <input v-model.trim="item.name" class="input" aria-label="请求 Header 名称" placeholder="Header 名称" /><input v-model="item.value" class="input" aria-label="请求 Header 值" placeholder="值；空值表示不转发" /><button type="button" class="button danger-ghost compact" @click="model.request_headers.splice(index, 1)">删除</button>

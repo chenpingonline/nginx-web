@@ -453,8 +453,8 @@ html[data-theme="light"] .app-update-github { color: #fff; }
   :root { --sidebar: 220px; }
   .app-shell { display: block; }
   .workspace-frame, .workspace { height: 100%; }
-  .sidebar { position: fixed; left: 0; width: var(--sidebar); visibility: hidden; transform: translateX(-100%); transition: transform .2s ease, visibility 0s .2s; box-shadow: 15px 0 40px rgba(0,0,0,.12); }
-  body.menu-open .sidebar { visibility: visible; transform: translateX(0); transition-delay: 0s; }
+  .sidebar { position: fixed; left: 0; width: var(--sidebar); display: none; box-shadow: 15px 0 40px rgba(0,0,0,.12); }
+  body.menu-open .sidebar { display: flex; }
   body.menu-open::after { content: ""; position: fixed; inset: 0; z-index: 25; background: rgba(18,25,31,.35); }
   .mobile-nav-bar { position: sticky; top: 0; z-index: 20; min-height: 52px; padding: 8px 14px; display: flex; align-items: center; gap: 8px; background: var(--surface-solid); border-bottom: 1px solid var(--line); }
   .mobile-nav-bar strong { font-size: 16px; }
@@ -714,6 +714,12 @@ html[data-theme="dark"] { --scroll-thumb: #686b6e; }
 .proxy-entry { display: flex; align-items: center; gap: 5px; }
 .proxy-entry-url { white-space: nowrap; }
 .proxy-entry .proxy-entry-action { width: 28px; height: 28px; flex: 0 0 28px; text-decoration: none; }
+.rule-config-copy { position: relative; width: 28px; height: 28px; }
+.rule-config-copy:is(:hover, :focus-visible)::after {
+  content: attr(aria-label); position: absolute; z-index: 2; right: calc(100% + 6px); top: 50%;
+  transform: translateY(-50%); padding: 4px 8px; border-radius: 6px; white-space: nowrap;
+  background: var(--text); color: var(--surface); font-size: 12px; pointer-events: none;
+}
 .proxy-entry-action:disabled { opacity: .35; cursor: not-allowed; }
 
 .grouped-rule-card { margin-bottom: 16px; }

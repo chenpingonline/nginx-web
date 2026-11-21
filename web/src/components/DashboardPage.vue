@@ -53,6 +53,25 @@ const pageNumbers = computed(() => {
   const start = Math.max(1, Math.min(page.value - 1, pageCount.value - 4));
   return Array.from({ length: Math.min(5, pageCount.value) }, (_, index) => start + index);
 });
+const ruleViewport = ref<HTMLDivElement>();
+const scrollMax = ref(0), scrollPosition = ref(0), thumbPercent = ref(100);
+function syncHorizontalScroll() {
+  const el = ruleViewport.value;
+  scrollMax.value = el ? el.scrollWidth - el.clientWidth : 0;
+  scrollPosition.value = el?.scrollLeft ?? 0;
+  thumbPercent.value = el?.scrollWidth ? 100 * el.clientWidth / el.scrollWidth : 100;
+}
+watch(ruleViewport, (el, _, onCleanup) => {
+  syncHorizontalScroll();
+  if (!el) return;
+  const observer = new ResizeObserver(syncHorizontalScroll);
+  observer.observe(el);
+  observer.observe(el.querySelector("table")!);
+  onCleanup(() => observer.disconnect());
+}, { flush: "post" });
+function scrollRuleTable(event: Event) {
+  if (ruleViewport.value) ruleViewport.value.scrollLeft = (event.target as HTMLInputElement).valueAsNumber;
+}
 const certificatePage = ref(1);
 const certificatePageCount = computed(() => Math.max(1, Math.ceil(props.certificates.length / 5)));
 const visibleCertificates = computed(() => props.certificates.slice((certificatePage.value - 1) * 5, certificatePage.value * 5));
@@ -207,7 +226,7 @@ const issue = computed(() => {
       <div class="protocol-tabs" aria-label="规则类型">
         <button v-for="item in protocols" :key="item.value" :aria-pressed="protocol === item.value" :class="{ active: protocol === item.value }" @click="protocol = item.value">{{ item.label }} ({{ item.count }})</button>
       </div>
-      <div v-if="visible.length" class="table-wrap">
+      <div v-if="visible.length" id="dashboard-rule-table" ref="ruleViewport" class="table-wrap" @scroll.passive="syncHorizontalScroll">
         <table class="table dashboard-table">
           <thead><tr><th>名称</th><th>类型</th><th>访问入口</th><th>转发服务</th><th>配置状态</th><th>平均请求速率</th><th>错误率</th></tr></thead>
           <tbody>
@@ -236,6 +255,10 @@ const issue = computed(() => {
       </div>
       <div v-else-if="!data" class="empty-state" role="status"><h3>{{ error ? "暂时无法读取规则" : "正在读取规则…" }}</h3><p>{{ error ? "请重试加载首页数据" : "获取配置与访问统计" }}</p></div>
       <div v-else class="empty-state"><h3>{{ rules.length ? "没有符合条件的规则" : "还没有代理规则" }}</h3><p>{{ rules.length ? "调整搜索条件或筛选后重试" : "添加代理规则并应用配置后，在这里查看运行情况" }}</p></div>
+      <div v-if="visible.length && scrollMax > 0" class="rule-scroll-track">
+        <input type="range" min="0" :max="scrollMax" :value="scrollPosition" :style="{ '--thumb-width': thumbPercent + '%' }"
+          aria-label="横向滚动代理规则表格" aria-controls="dashboard-rule-table" @input="scrollRuleTable" />
+      </div>
       <footer class="dashboard-pagination">
         <span>共 {{ filtered.length }} 条</span>
         <div><button class="page-button" :disabled="page <= 1" aria-label="上一页" @click="page--"><PhCaretLeft :size="15" /></button>
@@ -336,6 +359,13 @@ h2 { font-size: 16px; font-weight: 600; }
 .protocol-tabs button.active { border-color: var(--accent); background: #f4fcf7; color: var(--accent-dark); }
 .protocol-tabs button:not(.active) + button:not(.active)::before { content: ''; position: absolute; left: -1px; height: 14px; width: 1px; top: 6px; background: var(--line); }
 .dashboard-rules .table-wrap { margin: 0 19px; border: 1px solid var(--line); border-radius: 10px; }
+.dashboard-rules .table-wrap { scrollbar-width: none; }
+.dashboard-rules .table-wrap::-webkit-scrollbar { display: none; }
+.rule-scroll-track { margin: 2px 19px 0; display: flex; align-items: center; height: 14px; }
+.rule-scroll-track input { appearance: none; width: 100%; height: 8px; margin: 0; background: var(--surface-soft); border-radius: 8px; cursor: pointer; }
+.rule-scroll-track input::-webkit-slider-thumb { appearance: none; width: var(--thumb-width); height: 8px; background: var(--scroll-thumb); border-radius: 8px; }
+.rule-scroll-track input::-moz-range-thumb { width: var(--thumb-width); height: 8px; border: 0; background: var(--scroll-thumb); border-radius: 8px; }
+.rule-scroll-track input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dashboard-table { min-width: 960px; font-size: 14px; }
 .dashboard-table th { padding: 9px 14px; font-size: 14px; font-weight: 450; background: #f8fbfb; color: #4d5867; }
 .dashboard-table td { padding: 5px 14px; height: 43px; color: #536071; }
@@ -452,7 +482,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
   .rules-filters .select { flex: 1; }
   .protocol-tabs { margin: 9px 14px; max-width: calc(100% - 28px); }
   .protocol-tabs button { padding-inline: 10px; }
-  .dashboard-rules .table-wrap { margin-inline: 13px; }
+  .dashboard-rules .table-wrap, .rule-scroll-track { margin-inline: 13px; }
   .dashboard-pagination { padding: 8px 14px; flex-wrap: wrap; }
   .dashboard-pagination > div { margin-left: auto; }
   .certificate-attention { padding: 10px 14px; }

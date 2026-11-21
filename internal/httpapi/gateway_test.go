@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/gorilla/websocket"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -304,5 +306,80 @@ func TestGatewayFirstVisitPinsBeforeForwarding(t *testing.T) {
 	}
 	if w := gatewayRequest(api, "GET", path, ""); w.Code != http.StatusBadGateway || calls != 1 || !strings.Contains(w.Body.String(), "certificate_changed") {
 		t.Fatal(w.Code, w.Body.String(), calls)
+	}
+}
+
+func TestGatewayEntryOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name, host, proto, referer, want string
+		socket                           bool
+	}{
+		{"LAN", "192.168.1.88:5666", "http", "", "http", true},
+		{"fnConnect", "nas.example", "https", "", "https", true},
+		{"same-origin fallback", "nas.example", "", "https://nas.example/app/", "https", true},
+		{"foreign referrer", "nas.example", "", "https://other.example/", "http", true},
+		{"untrusted TCP", "nas.example", "https", "", "http", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != tc.host || r.Header.Get("X-Forwarded-Host") != tc.host || r.Header.Get("X-Forwarded-Proto") != tc.want {
+					t.Errorf("upstream host=%q forwarded=%q proto=%q", r.Host, r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Forwarded-Proto"))
+				}
+				http.Redirect(w, r, tc.want+"://"+tc.host+"/user/login", http.StatusFound)
+			}))
+			defer backend.Close()
+			api, _, _ := gatewayTestAPI(t, backend.URL)
+			r := httptest.NewRequest("GET", gatewayPrefix+"/proxy/music/", nil)
+			r.Host = tc.host
+			r.Header.Set("X-Trim-Isadmin", "true")
+			r.Header.Set("X-Forwarded-Proto", tc.proto)
+			r.Header.Set("Referer", tc.referer)
+			if tc.socket {
+				r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.UnixAddr{Name: "app.sock", Net: "unix"}))
+			}
+			w := httptest.NewRecorder()
+			api.ServeHTTP(w, r)
+			if got := w.Header().Get("Location"); got != gatewayPrefix+"/proxy/music/user/login" {
+				t.Errorf("redirect = %q", got)
+			}
+		})
+	}
+}
+
+func TestGatewayBrowserEntryRestoresFnosOrigin(t *testing.T) {
+	for _, entry := range []string{"http://192.168.1.88:5666", "https://nas.example"} {
+		t.Run(entry, func(t *testing.T) {
+			calls := 0
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Header.Get("X-Forwarded-Proto")+"://"+r.Host != entry || r.Header.Get("X-Forwarded-Host") != r.Host || r.Header.Get("Cookie") != "" {
+					t.Errorf("incorrect upstream origin or cookie isolation")
+				}
+				http.Redirect(w, r, entry+"/dashboard", http.StatusFound)
+			}))
+			defer backend.Close()
+			api, svc, _ := gatewayTestAPI(t, backend.URL)
+			route := svc.State().GatewayRoutes[0]
+			route.Compatibility = "subpath"
+			if _, err := svc.SaveGatewayRoute(route.ID, route); err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("GET", gatewayPrefix+"/proxy/music/", nil)
+			r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.UnixAddr{Net: "unix"}))
+			r.Host = "localhost"
+			r.Header.Set("X-Trim-Isadmin", "true")
+			r.Header.Set("Accept", "text/html")
+			w := httptest.NewRecorder()
+			api.ServeHTTP(w, r)
+			if calls != 0 || w.Code != 200 || !strings.Contains(w.Body.String(), "location.origin") {
+				t.Fatal("missing entry bootstrap")
+			}
+			r.AddCookie(&http.Cookie{Name: "fnproxy_gateway_entry", Value: entry})
+			w = httptest.NewRecorder()
+			api.ServeHTTP(w, r)
+			if calls != 1 || w.Header().Get("Location") != gatewayPrefix+"/proxy/music/dashboard" {
+				t.Fatal("incorrect entry redirect")
+			}
+		})
 	}
 }

@@ -71,3 +71,42 @@ func TestSiteRuleExclusionIsTransactionScoped(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredBodyLimitWithoutContentLength(t *testing.T) {
+	i := new(Inspector)
+	for _, tc := range []struct {
+		mode           string
+		bytes          int
+		status         int
+		limit, partial bool
+	}{
+		{"block|1|reject|true", 1 << 20, 200, false, false},
+		{"block|1|reject|true", 1<<20 + 1, 413, true, false},
+		{"detect|1|reject|true", 1<<20 + 1, 200, true, false},
+		{"block|1|partial|true", 1<<20 + 1, 200, true, true},
+	} {
+		before := len(i.Events())
+		r := httptest.NewRequest("PUT", "http://files.example.test/upload", strings.NewReader(strings.Repeat("a", tc.bytes)))
+		r.ContentLength = -1
+		r.Header.Set("X-Fnproxy-Mode", tc.mode)
+		r.Header.Set("X-Fnproxy-Instance", "123456abcdef")
+		r.Header.Set("X-Fnproxy-Site", "abcdef123456")
+		r.Header.Set("X-Fnproxy-Target", "generic")
+		r.Header.Set("X-Fnproxy-Protocol", "HTTP/1.1")
+		r.Header.Set("Content-Type", "application/octet-stream")
+		r.Header.Set("User-Agent", "upload-test")
+		r.Header.Set("Accept", "*/*")
+		w := httptest.NewRecorder()
+		i.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s returned %d: %v", tc.mode, w.Code, i.Events())
+		}
+		events := i.Events()
+		if tc.limit && (len(events) <= before || !events[0].BodyLimit || events[0].PartialBody != tc.partial || events[0].Blocked != (tc.status == 413)) {
+			t.Fatalf("missing size outcome: %+v", events)
+		}
+		if !tc.limit && len(events) > before && events[0].BodyLimit {
+			t.Fatal("recorded limit at exact boundary")
+		}
+	}
+}

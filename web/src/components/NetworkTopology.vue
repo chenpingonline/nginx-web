@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, shallowRef } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import {
-  PhGlobe,
+  PhGlobe, PhPlay, PhPause, PhSkipBack, PhSkipForward,
   PhTreeStructure,
   PhFlowArrow,
   PhListBullets,
@@ -22,6 +22,7 @@ interface Flow {
   rule: string;
   client: string;
   upstream: string;
+  outcome?: "waf_only" | "no_upstream";
   requests: number;
   bytes: number;
 }
@@ -36,8 +37,13 @@ interface Frame {
 const frames = shallowRef<Frame[]>([]),
   replay = ref(false),
   index = ref(0);
+const history = shallowRef<Frame[]>([]);
+const playing = ref(false);
+const speed = ref(1);
+const last = computed(() => history.value.length - 1);
+const timestamp = (item?: Frame) => item ? new Date(item.time * 1000).toLocaleTimeString() : "";
 const frame = computed(
-  () => frames.value[replay.value ? index.value : frames.value.length - 1],
+  () => replay.value ? history.value[index.value] : frames.value[frames.value.length - 1],
 );
 const search = ref(""),
   ip = ref(""),
@@ -71,7 +77,10 @@ interface Node {
   hits: number;
   bytes: number;
   clients: Set<string>;
-  missingUpstream?: boolean;
+  outcomeNode?: boolean;
+}
+function isEndpoint(target: string) {
+  return /:\d+$/.test(target) || target.startsWith("unix:");
 }
 const widths = [46, 46, 188, 238, 250];
 const graph = computed(() => {
@@ -110,7 +119,15 @@ const graph = computed(() => {
   const sites = [...(frame.value?.sites ?? [])].sort((a, b) =>
     a.listener.localeCompare(b.listener),
   );
-  for (const site of sites) {
+  // Keep sites with the same configured endpoint adjacent within their listener.
+  const firstSite = new Map<string, number>();
+  const ordered = sites.map((site, index) => {
+    const endpoint = site.targets?.find(isEndpoint);
+    const key = JSON.stringify([site.listener, endpoint]);
+    if (endpoint && !firstSite.has(key)) firstSite.set(key, index);
+    return { site, order: firstSite.get(key) ?? index };
+  }).sort((a, b) => a.order - b.order);
+  for (const { site } of ordered) {
     if (listenerFilter.value && site.listener !== listenerFilter.value)
       continue;
     const flows = flowsBySite.get(site.id) ?? [];
@@ -122,12 +139,16 @@ const graph = computed(() => {
         .map((value) => value.trim())
         .filter((value) => value && value !== "-");
       for (const target of attempts) destinations.add(target);
-      return { flow, target: attempts.at(-1) };
+      const target = attempts.at(-1);
+      const outcome = target ? undefined : flow.outcome === "waf_only"
+        ? "经过 WAF，未转发到后端"
+        : flow.outcome === "no_upstream" ? "未使用上游" : "未记录到上游";
+      return { flow, target, outcome };
     });
-    const hasMissing = outcomes.some((outcome) => !outcome.target);
+    const outcomeLabels = new Set(outcomes.flatMap(({ outcome }) => outcome ? [outcome] : []));
     if (focus.value && !flows.length) continue;
     if (
-      ![site.name, site.listener, ...destinations]
+      ![site.name, site.listener, ...destinations, ...outcomeLabels]
         .join(" ")
         .toLowerCase()
         .includes(search.value.trim().toLowerCase())
@@ -139,21 +160,19 @@ const graph = computed(() => {
       const dest = put(site.id + "|" + target, target, 4, host);
       dest.y = 72 + row++ * 64;
     }
-    const missing = hasMissing
-      ? put("missing-upstream|" + site.id, "未记录到上游", 4, host)
-      : undefined;
-    if (missing) {
-      missing.missingUpstream = true;
-      missing.y = 72 + row++ * 64;
+    for (const outcome of outcomeLabels) {
+      const node = put("outcome|" + site.id + "|" + outcome, outcome, 4, host);
+      node.outcomeNode = true;
+      node.y = 72 + row++ * 64;
     }
-    if (!destinations.size && !missing) host.y = 72 + row++ * 64;
-    for (const { flow: f, target } of outcomes) {
+    if (!destinations.size && !outcomeLabels.size) host.y = 72 + row++ * 64;
+    for (const { flow: f, target, outcome } of outcomes) {
       for (const node of [host, listener, nginx, root]) {
         node.hits += f.requests;
         node.bytes += f.bytes;
         if (f.client) node.clients.add(f.client);
       }
-      const dest = target ? byId.get(site.id + "|" + target) : missing;
+      const dest = byId.get(target ? site.id + "|" + target : "outcome|" + site.id + "|" + outcome);
       if (dest) {
         dest.hits += f.requests;
         dest.bytes += f.bytes;
@@ -174,12 +193,41 @@ const graph = computed(() => {
     if (list) n.y = (list[0].y + list[list.length - 1].y) / 2;
     else if (!n.y) n.y = 100;
   }
-  return { nodes, height: Math.max(210, row * 64 + 55) };
+  const endpoints = new Map<string, Node>();
+  const placements = new Map<Node, number[]>();
+  const displayed = nodes.filter((n) => {
+    if (n.col !== 4 || n.outcomeNode || !isEndpoint(n.label)) return true;
+    let endpoint = endpoints.get(n.label);
+    if (!endpoint) {
+      endpoint = { ...n, id: "endpoint|" + n.label, parent: undefined, hits: 0, bytes: 0, clients: new Set() };
+      endpoints.set(n.label, endpoint);
+      placements.set(endpoint, []);
+    }
+    endpoint.hits += n.hits;
+    endpoint.bytes += n.bytes;
+    for (const client of n.clients) endpoint.clients.add(client);
+    placements.get(endpoint)!.push(n.y);
+    return false;
+  });
+  for (const [endpoint, rows] of placements) {
+    endpoint.y = rows.reduce((sum, y) => sum + y, 0) / rows.length;
+    displayed.push(endpoint);
+  }
+  const leaves = displayed.filter((n) => n.col === 4).sort((a, b) => a.y - b.y);
+  let nextY = 72;
+  for (const [index, leaf] of leaves.entries()) {
+    leaf.y = Math.max(nextY, Math.min(leaf.y, 72 + (row - leaves.length + index) * 64));
+    nextY = leaf.y + 64;
+  }
+  const links = nodes.flatMap((branch) => branch.parent ? [{
+    source: branch.parent,
+    target: (branch.col === 4 && !branch.outcomeNode && endpoints.get(branch.label)) || branch,
+    branch,
+  }] : []);
+  return { nodes: displayed, links, height: Math.max(210, row * 64 + 55) };
 });
-function edge(n: Node) {
-  if (!n.parent) return "";
-  const { parent: p } = n,
-    start = p.x + widths[p.col] / 2,
+function edge(p: Node, n: Node) {
+  const start = p.x + widths[p.col] / 2,
     end = n.x - widths[n.col] / 2,
     mid = (start + end) / 2;
   return `M ${start} ${p.y} C ${mid} ${p.y}, ${mid} ${n.y}, ${end} ${n.y}`;
@@ -193,10 +241,9 @@ const bands = computed(() => {
   );
   const used = new Map<Node, number>();
   const paths = [];
-  for (const n of graph.value.nodes) {
-    const parent = n.parent;
-    if (!parent || n.col < 3 || !n[field]) continue;
-    const width = (40 * n[field]) / peak;
+  for (const { source: parent, target: n, branch } of graph.value.links) {
+    if (n.col < 3 || !branch[field]) continue;
+    const width = (40 * branch[field]) / peak;
     const offset = used.get(parent) ?? 0;
     const startY = parent.y - (20 * parent[field]) / peak + offset + width / 2;
     used.set(parent, offset + width);
@@ -204,7 +251,7 @@ const bands = computed(() => {
     const end = n.x - widths[n.col] / 2;
     const mid = (start + end) / 2;
     const path = `M ${start} ${startY} C ${mid} ${startY}, ${mid} ${n.y}, ${end} ${n.y}`;
-    paths.push({ node: n, width, path });
+    paths.push({ node: n, branch, width, path });
   }
   return paths;
 });
@@ -223,15 +270,16 @@ const detail = computed(
     graph.value.nodes[1],
 );
 const related = computed(() =>
-  graph.value.nodes.filter((n) => n.parent === detail.value),
+  graph.value.links.filter((link) => link.source === detail.value).map((link) => link.target),
 );
+const upstream = computed(() => graph.value.links.filter((link) => link.target === detail.value).map((link) => link.source));
 function traffic(bytes: number) {
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MiB";
   if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KiB";
   return bytes + " B";
 }
 function label(n: Node) {
-  return mask.value && n.col >= 3 && !n.missingUpstream
+  return mask.value && n.col >= 3 && !n.outcomeNode
     ? names[n.col].split(" / ")[0] +
         " " +
         (graph.value.nodes.filter((other) => other.col === n.col).indexOf(n) +
@@ -243,7 +291,7 @@ let timer: ReturnType<typeof setTimeout>,
 async function poll() {
   try {
     const next = await request<Frame>("/topology");
-    if (!stopped && !replay.value)
+    if (!stopped)
       frames.value = [...frames.value.slice(-29), next];
     error.value = "";
   } catch (e) {
@@ -253,9 +301,28 @@ async function poll() {
   }
 }
 function toggleReplay() {
-  index.value = Math.max(0, frames.value.length - 1);
+  playing.value = false;
+  history.value = replay.value ? [] : frames.value;
+  index.value = Math.max(0, last.value);
   replay.value = !replay.value;
 }
+function seek(position: number) {
+  playing.value = false;
+  index.value = position;
+}
+function togglePlayback() {
+  if (index.value === last.value) index.value = 0;
+  playing.value = !playing.value;
+}
+watch([playing, speed, index], (_, __, cleanup) => {
+  if (!playing.value) return;
+  const current = history.value[index.value];
+  const next = history.value[index.value + 1];
+  if (!next) { playing.value = false; return; }
+  const delay = Math.max(100, (next.time - current.time) * 1000 / speed.value);
+  const tick = setTimeout(() => { index.value++; }, delay);
+  cleanup(() => clearTimeout(tick));
+});
 onMounted(() => {
   window.addEventListener("keydown", exitExpanded);
   poll();
@@ -288,11 +355,11 @@ onBeforeUnmount(() => {
       </button>
       <button
         class="button"
-        :disabled="!frames.length"
+        :disabled="!frames.length" title="查看本页最近采集的拓扑快照"
         :aria-pressed="replay"
         @click="toggleReplay"
       >
-        {{ replay ? "返回实时" : "回放" }}
+        回放
       </button>
       <button
         class="button"
@@ -323,15 +390,21 @@ onBeforeUnmount(() => {
         </option></AppSelect
       >
     </div>
-    <div v-if="replay" class="tools">
-      <label
-        >本页回放
-        <input
-          type="range"
-          v-model.number="index"
-          min="0"
-          :max="frames.length - 1" /></label
-      >{{ new Date((frame?.time ?? 0) * 1000).toLocaleTimeString() }}
+    <div v-if="replay" class="tools replay-panel" role="group" aria-label="拓扑回放">
+      <button class="button" aria-label="上一帧" title="上一帧" :disabled="index === 0" @click="seek(index - 1)"><PhSkipBack :size="16" /></button>
+      <button class="button" :aria-label="playing ? '暂停' : '播放'" :title="playing ? '暂停' : '播放'" :disabled="last < 1" @click="togglePlayback">
+        <component :is="playing ? PhPause : PhPlay" :size="16" />
+      </button>
+      <button class="button" aria-label="下一帧" title="下一帧" :disabled="index === last" @click="seek(index + 1)"><PhSkipForward :size="16" /></button>
+      <strong>{{ timestamp(frame) }}</strong>
+      <div class="replay-timeline">
+        <input type="range" aria-label="回放时间" :aria-valuetext="timestamp(frame)" :value="index" min="0" :max="last" :disabled="last < 1" @input="seek(Number(($event.target as HTMLInputElement).value))" />
+        <div><span>{{ timestamp(history[0]) }}</span><span>{{ timestamp(history[last]) }}</span></div>
+      </div>
+      <AppSelect class="select" v-model="speed" aria-label="播放速度">
+        <option v-for="rate in [1, 2, 5, 10]" :key="rate" :value="rate">{{ rate }}×</option>
+      </AppSelect>
+      <button class="button" @click="toggleReplay">返回实时</button>
     </div>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-else-if="frame && !frame.logging">
@@ -394,24 +467,24 @@ onBeforeUnmount(() => {
             <template v-if="sankey">
               <path
                 v-for="band in bands"
-                :key="band.node.id"
+                :key="band.branch.id"
                 :d="band.path"
                 class="flow-band"
-                :class="{ unattributed: band.node.missingUpstream }"
+                :class="{ unattributed: band.node.outcomeNode }"
                 :style="{ strokeWidth: band.width }"
               >
                 <title>
                   {{ label(band.node) }} ·
                   {{
                     metric === "hits"
-                      ? band.node.hits + " 次请求"
-                      : traffic(band.node.bytes)
+                      ? band.branch.hits + " 次请求"
+                      : traffic(band.branch.bytes)
                   }}
                 </title>
               </path>
             </template>
-            <template v-for="n in sankey ? [] : graph.nodes" :key="n.id">
-              <path v-if="n.parent" :class="{ hot: n.hits }" :d="edge(n)" />
+            <template v-if="!sankey">
+              <path v-for="link in graph.links" :key="link.branch.id" :class="{ hot: link.branch.hits }" :d="edge(link.source, link.target)" />
             </template>
             <g
               v-for="n in visibleNodes"
@@ -560,14 +633,15 @@ onBeforeUnmount(() => {
             }}<span>{{ ip === client ? "✓" : "›" }}</span>
           </button>
         </div>
-        <div v-if="detail.parent || related.length" class="detail-section">
-          <h3 v-if="detail.parent">上游节点</h3>
+        <div v-if="upstream.length || related.length" class="detail-section">
+          <h3 v-if="upstream.length">上游节点</h3>
           <button
-            v-if="detail.parent"
+            v-for="parent in upstream"
+            :key="parent.id"
             class="link-row"
-            @click="selected = detail.parent.id"
+            @click="selected = parent.id"
           >
-            {{ label(detail.parent) }}<span>›</span>
+            {{ label(parent) }}<span>›</span>
           </button>
           <h3 v-if="related.length">
             下游节点 <small>{{ related.length }}</small>
@@ -620,7 +694,12 @@ onBeforeUnmount(() => {
 .node-search input { flex:1; min-width:0; width:100%; }
 .actions { justify-content:flex-end; flex-wrap:wrap; }
 .actions > .button { width: 52px; }
-.actions > .button:first-child, .actions > .button:nth-child(3) { width: 78px; }
+.actions > .button:first-child { width: 78px; }
+.replay-panel { padding:8px; border:1px solid var(--border); border-radius:8px; }
+.replay-panel strong, .replay-timeline { font-variant-numeric:tabular-nums; }
+.replay-timeline { flex:1 1 150px; min-width:0; }
+.replay-timeline input { width:100%; margin:0; accent-color:var(--accent); }
+.replay-timeline div { display:flex; justify-content:space-between; color:var(--text-muted); font-size:12px; }
 .actions > .layout-picker { width:116px; }
 @container (max-width: 820px) {
   .topology-toolbar { grid-template-columns:minmax(0,1fr); gap:6px; }

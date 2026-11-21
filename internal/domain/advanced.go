@@ -204,42 +204,44 @@ type LocationSettings struct {
 	ReadTimeoutSeconds    int `json:"read_timeout_seconds,omitempty"`
 	SendTimeoutSeconds    int `json:"send_timeout_seconds,omitempty"`
 
-	BackendType        string             `json:"backend_type"`
-	UpstreamScheme     string             `json:"upstream_scheme"`
-	UpstreamPoolID     string             `json:"upstream_pool_id,omitempty"`
-	UpstreamHost       string             `json:"upstream_host,omitempty"`
-	UpstreamPort       int                `json:"upstream_port,omitempty"`
-	StaticPath         string             `json:"static_path,omitempty"`
-	StaticAlias        bool               `json:"static_alias"`
-	IndexFiles         []string           `json:"index_files"`
-	AutoIndex          bool               `json:"autoindex"`
-	Expires            string             `json:"expires,omitempty"`
-	TryFiles           []string           `json:"try_files"`
-	ReturnCode         int                `json:"return_code"`
-	ReturnTarget       string             `json:"return_target,omitempty"`
-	RedirectToHTTPS    bool               `json:"redirect_to_https"`
-	Rewrites           []RewriteRule      `json:"rewrites"`
-	Cache              CacheSettings      `json:"cache"`
-	Allow              []string           `json:"allow"`
-	Deny               []string           `json:"deny"`
-	RequestHeaders     []HeaderSetting    `json:"request_headers"`
-	ResponseHeaders    []HeaderSetting    `json:"response_headers"`
-	BasicAuth          bool               `json:"basic_auth"`
-	BasicAuthRealm     string             `json:"basic_auth_realm"`
-	BasicAuthFile      string             `json:"basic_auth_file,omitempty"`
-	AuthRequest        string             `json:"auth_request,omitempty"`
-	SecureLink         SecureLinkSettings `json:"secure_link"`
-	DAV                DAVSettings        `json:"dav"`
-	SubFilters         []SubFilterSetting `json:"sub_filters"`
-	SubFilterOnce      bool               `json:"sub_filter_once"`
-	SubFilterTypes     []string           `json:"sub_filter_types"`
-	AdditionBefore     string             `json:"addition_before,omitempty"`
-	AdditionAfter      string             `json:"addition_after,omitempty"`
-	Mirror             string             `json:"mirror,omitempty"`
-	MirrorRequestBody  bool               `json:"mirror_request_body"`
-	SSI                bool               `json:"ssi"`
-	ValidReferers      []string           `json:"valid_referers"`
-	DenyInvalidReferer bool               `json:"deny_invalid_referer"`
+	BackendType          string             `json:"backend_type"`
+	UpstreamScheme       string             `json:"upstream_scheme"`
+	UpstreamPoolID       string             `json:"upstream_pool_id,omitempty"`
+	UpstreamHost         string             `json:"upstream_host,omitempty"`
+	UpstreamPort         int                `json:"upstream_port,omitempty"`
+	StaticPath           string             `json:"static_path,omitempty"`
+	StaticAlias          bool               `json:"static_alias"`
+	IndexFiles           []string           `json:"index_files"`
+	AutoIndex            bool               `json:"autoindex"`
+	Expires              string             `json:"expires,omitempty"`
+	TryFiles             []string           `json:"try_files"`
+	ReturnCode           int                `json:"return_code"`
+	ReturnTarget         string             `json:"return_target,omitempty"`
+	RedirectToHTTPS      bool               `json:"redirect_to_https"`
+	Rewrites             []RewriteRule      `json:"rewrites"`
+	Cache                CacheSettings      `json:"cache"`
+	Allow                []string           `json:"allow"`
+	Deny                 []string           `json:"deny"`
+	ExplicitProxyHeaders bool               `json:"explicit_proxy_headers,omitempty"`
+	ProxyHTTPVersion     string             `json:"proxy_http_version,omitempty"`
+	RequestHeaders       []HeaderSetting    `json:"request_headers"`
+	ResponseHeaders      []HeaderSetting    `json:"response_headers"`
+	BasicAuth            bool               `json:"basic_auth"`
+	BasicAuthRealm       string             `json:"basic_auth_realm"`
+	BasicAuthFile        string             `json:"basic_auth_file,omitempty"`
+	AuthRequest          string             `json:"auth_request,omitempty"`
+	SecureLink           SecureLinkSettings `json:"secure_link"`
+	DAV                  DAVSettings        `json:"dav"`
+	SubFilters           []SubFilterSetting `json:"sub_filters"`
+	SubFilterOnce        bool               `json:"sub_filter_once"`
+	SubFilterTypes       []string           `json:"sub_filter_types"`
+	AdditionBefore       string             `json:"addition_before,omitempty"`
+	AdditionAfter        string             `json:"addition_after,omitempty"`
+	Mirror               string             `json:"mirror,omitempty"`
+	MirrorRequestBody    bool               `json:"mirror_request_body"`
+	SSI                  bool               `json:"ssi"`
+	ValidReferers        []string           `json:"valid_referers"`
+	DenyInvalidReferer   bool               `json:"deny_invalid_referer"`
 }
 
 type LocationRule struct {
@@ -553,6 +555,9 @@ func NormalizeHTTPLocations(rule *ProxyRule) {
 }
 
 func ValidateLocationSettings(settings LocationSettings, pools map[string]UpstreamPool) error {
+	if settings.ProxyHTTPVersion != "" && settings.ProxyHTTPVersion != "1.0" && settings.ProxyHTTPVersion != "1.1" {
+		return errors.New("代理 HTTP 版本只支持 1.0 或 1.1")
+	}
 	allowed := map[string]bool{"proxy": true, "static": true, "return": true, "grpc": true, "fastcgi": true, "uwsgi": true, "scgi": true, "memcached": true, "status": true}
 	if !allowed[settings.BackendType] {
 		return errors.New("Location 后端类型不支持")

@@ -20,7 +20,6 @@ import {
   PhArrowClockwise,
   PhArrowUp,
   PhArrowDown,
-  PhArrowSquareOut,
   PhCopy,
   PhCaretDown,
   PhCaretRight,
@@ -50,14 +49,17 @@ import ErrorDetailsPage from "./components/AnalysisPage.vue";
 import CertificateForm from "./components/CertificateForm.vue";
 import UpstreamPoolsPage from "./components/UpstreamPoolsPage.vue";
 import RateLimitPoliciesPage from "./components/RateLimitPoliciesPage.vue";
+import AuthProfilesPage from "./components/AuthProfilesPage.vue";
 import RateLimitPolicyManager from "./components/RateLimitPolicyManager.vue";
 import BackupPage, { type BackupFile } from "./components/BackupPage.vue";
 import RuntimeSettingsForm from "./components/RuntimeSettingsForm.vue";
 import SidebarIcon from "./components/SidebarIcon.vue";
 import GatewayRoutesPage from "./components/GatewayRoutesPage.vue";
 import ConfigDialog from "./components/ConfigDialog.vue";
+import SourceParameterDialog from "./components/SourceParameterDialog.vue";
+import ProxyAddress from "./components/ProxyAddress.vue";
 import ConfigSources from "./components/ConfigSources.vue";
-import { sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
+import { updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -90,6 +92,7 @@ type SidebarIconName =
   | "http"
   | "stream"
   | "upstreams"
+  | "auth"
   | "rate-limit"
   | "certificate"
   | "logs"
@@ -124,6 +127,7 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     label: "转发服务组",
     subtitle: "管理负载均衡、节点健康参数与连接复用",
   },
+  { id: "auth-profiles", icon: "auth", label: "认证策略", subtitle: "管理代理规则使用的认证用户", groupLabel: "安全与限流" },
   {
     id: "rate-limits",
     icon: "rate-limit",
@@ -136,6 +140,7 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     label: "SSL/TLS 证书",
     subtitle: "管理证书导入、ACME 申请与自动续期",
   },
+  { id: "waf", icon: "certificate", label: "WAF 防火墙", subtitle: "管理站点防护实例与命中日志" },
   {
     id: "gateway",
     icon: "http",
@@ -143,8 +148,7 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     subtitle: "通过飞牛访问域名按路径转发 HTTP 服务",
     groupLabel: "网关",
   },
-  {id:"waf",icon:"certificate",label:"WAF 防火墙",subtitle:"管理站点防护实例与命中日志", groupLabel: "监控分析" },
-  {id:"topology",icon:"stream",label:"网络拓扑",subtitle:"查看代理流量与活动访客"},
+  {id:"topology",icon:"stream",label:"网络拓扑",subtitle:"查看代理流量与活动访客", groupLabel: "监控分析" },
   { id: "errors", icon: "requests", label: "请求分析", subtitle: "分析 HTTP / HTTPS 请求、性能与异常" },
   {
     id: "logs",
@@ -266,7 +270,7 @@ const acmeJobsPanel = ref<InstanceType<typeof ACMEJobs> | null>(null);
 const modal = ref<"rule" | "certificate" | null>(null),
   editingRule = ref<ProxyRule | null>(null),
   rateLimitManagerOpen = ref(false),
-  rateLimitManagerCreateNew = ref(false),
+  editingRateLimitPolicy = ref<RateLimitPolicy>(),
   toasts = ref<Toast[]>([]),
   logView = ref<HTMLElement | null>(null),
   toastID = ref(0);
@@ -283,7 +287,15 @@ const selectedGroup = ref("all");
 const groupPanel = ref<InstanceType<typeof RuleGroups>>();
 const ruleGroups = computed(() => state.value?.rule_groups ?? []);
 function updateAuthProfiles(profiles: AuthProfile[]) {
-  if (state.value) state.value.auth_profiles = profiles;
+  if (state.value) {
+    state.value.auth_profiles = profiles;
+    state.value.dirty = true;
+  }
+}
+async function removeAuthProfile(profile: AuthProfile) {
+  if (!(await ask("删除认证策略", `确定删除“${profile.name}”吗？`))) return;
+  const deleted = await mutate(() => request(`/auth-profiles/${profile.id}`, { method: "DELETE" }), "认证策略已删除");
+  if (deleted) await loadCore(true);
 }
 async function saveRuleGroup(value: RuleGroup): Promise<{ group: RuleGroup; error?: string }> {
   if (busy.value) throw new Error("请等待当前操作完成");
@@ -409,9 +421,6 @@ function canOpenRuleEntry(domain?: string): boolean {
 function formatRuleBackend(rule: ProxyRule): string {
   return `${rule.upstream_scheme}://${formatHost(rule.upstream_host)}:${rule.upstream_port}`;
 }
-async function copyRuleEntry(rule: ProxyRule, domain: string) {
-  await copyProxyAddress(formatRuleEntry(rule, domain), "入口地址");
-}
 async function copyText(value: string) {
   try {
     await navigator.clipboard.writeText(value);
@@ -475,6 +484,7 @@ const configText = computed(() =>
 );
 const configCopied = ref(false);
 let configCopiedTimer: number | undefined;
+const parameterFile = ref<CustomConfig>();
 const customConfigOpen = ref(false);
 const customConfigOriginal = ref("");
 const customConfigForm = reactive<CustomConfig>({ name: "custom-config.conf", content: "server {\n    listen 8080;\n    server_name example.com;\n    return 200;\n}\n" });
@@ -656,7 +666,61 @@ async function discardDraft() {
     await loadCore(true);
   }
 }
+const sourceReplacement = ref<ReturnType<typeof sourceRuleCandidate>["source"]>();
+async function inspectSource(entry: SourceEntry) {
+  const { source, raw, rule, generated } = sourceRuleCandidate(entry, state.value!.rules);
+  const parsed = await request<{rule: ProxyRule; content: string}>("/config-import/inspect", {
+    method: "POST", body: jsonBody({source, rules: [rule]}),
+  });
+  if (generated && ruleDirectives(parsed.content) !== ruleDirectives(raw)) {
+    throw new Error("此配置含规则表单无法完整还原的指令");
+  }
+  return { source, rule: parsed.rule };
+}
+const pendingSource = ref<SourceEntry>();
+function previewSource(entry: SourceEntry) {
+  rulePreview.value = { name: entry.title, content: sourceBlock(entry).raw, draft: !!state.value?.dirty };
+}
+async function changeSource(entry: SourceEntry, remove: boolean) {
+  const verb = remove ? "删除" : "停用";
+  if (busy.value || pendingSource.value) return;
+  if (!remove) pendingSource.value = entry;
+  try {
+    const action = remove ? "删除此配置块" : "将此配置块转为未分组规则并停用";
+    if (!await ask(verb + "代理规则", "确定" + action + "（" + entry.title + "）吗？此操作会立即应用当前全部草稿。")) return;
+    let saved = false;
+    await mutate(async () => {
+      if (remove) {
+        await request("/config-import/source-block", { method: "DELETE", body: jsonBody(sourceBlock(entry).source) });
+      } else {
+        const { source, rule } = await inspectSource(entry);
+        await saveSourceRule(source, { ...rule, enabled: false });
+      }
+      saved = true;
+      await request("/apply", { method: "POST", body: jsonBody({summary: verb + "规则：" + entry.title}) });
+    }, "规则已" + verb + "并应用");
+    if (saved) await loadCore(true);
+  } finally { pendingSource.value = undefined; }
+}
+async function saveSourceRule(source: ReturnType<typeof sourceBlock>["source"], rule: ProxyRuleInput & {id?: string}) {
+  const payload = { source, rules: [rule] };
+  const expected = await request<string[]>("/config-import/preview", { method: "POST", body: jsonBody(payload) });
+  await request("/config-import/save", { method: "POST", body: jsonBody({ ...payload, expected }) });
+}
+async function openSourceRule(entry: SourceEntry) {
+  if (!state.value || busy.value) return;
+  busy.value = true;
+  try {
+    const {source, rule} = await inspectSource(entry);
+    openRule(rule);
+    sourceReplacement.value = source;
+  } catch (error) {
+    toast(errorMessage(error) + "。已打开源文件。", "error");
+    await editSource(entry);
+  } finally { busy.value = false; }
+}
 function openRule(rule: ProxyRule | null = null) {
+  sourceReplacement.value = undefined;
   editingRule.value = rule;
   newRuleGroup.value = selectedGroup.value === "all" ? "" : selectedGroup.value;
   modal.value = "rule";
@@ -670,21 +734,31 @@ function closeModal() {
     modal.value = null;
   }
 }
-function manageRateLimitPolicies(createNew = false) {
+function manageRateLimitPolicies(policy?: RateLimitPolicy) {
   if (busy.value) return;
-  rateLimitManagerCreateNew.value = createNew;
+  editingRateLimitPolicy.value = policy;
   rateLimitManagerOpen.value = true;
 }
 async function saveRule(value: ProxyRuleInput, applyAfter: boolean) {
   const id = editingRule.value?.id;
   let persisted = false;
   const saved = await mutate(async () => {
-    const rule = await request<ProxyRule>(id ? `/rules/${id}` : "/rules", {
-      method: id ? "PUT" : "POST",
-      body: jsonBody(value),
-    });
+    if (sourceReplacement.value) {
+      const source = sourceReplacement.value;
+      const [rendered] = await request<string[]>("/config-import/preview", {
+        method: "POST", body: jsonBody({ source, rules: [{ ...value, id }] }),
+      });
+      const { content, end } = updateSourceBlock(source, rendered);
+      const file = await request<CustomConfig>("/custom-configs/" + encodeURIComponent(source.name), {
+        method: "PUT", body: jsonBody({ name: source.name, content, expected_content: source.expected }),
+      });
+      sourceReplacement.value = { ...source, expected: file.content, end };
+    } else {
+      editingRule.value = await request<ProxyRule>(id ? `/rules/${id}` : "/rules", {
+        method: id ? "PUT" : "POST", body: jsonBody(value),
+      });
+    }
     persisted = true;
-    editingRule.value = rule;
     if (applyAfter) {
       try {
         await request("/apply", {
@@ -1140,7 +1214,7 @@ onBeforeUnmount(() => {
           <BackupPage v-else-if="page === 'backup'" :state="state" :busy="busy" @download="downloadBackup" @restore="restoreBackup" @apply="applyConfiguration" />
           <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" @updated="updateGatewayRoute" :busy="busy" @refresh="loadCore(true)" />
           <template v-else-if="page === 'streams'">
-            <StreamRulesPage
+            <StreamRulesPage @copy="copyProxyAddress"
               :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @source-saved="sourceSaved" @preview="(r)=>showConfig(r.id,r.name,true)"
               :dirty="state.dirty"
               :pending-toggles="streamToggleTargets"
@@ -1161,6 +1235,8 @@ onBeforeUnmount(() => {
               @remove="removeUpstreamPool"
               @refresh="loadCore()"
           /></template>
+          <AuthProfilesPage v-else-if="page === 'auth-profiles'" :profiles="state.auth_profiles ?? []" :rules="state.rules" :busy="busy"
+            @changed="updateAuthProfiles" @remove="removeAuthProfile" @refresh="loadCore()" />
           <template v-else-if="page === 'rate-limits'"
             ><RateLimitPoliciesPage
               :policies="state.rate_limit_policies"
@@ -1209,7 +1285,7 @@ onBeforeUnmount(() => {
               <button class="button ghost" :disabled="!hasRuleFilters" @click="resetRuleFilters">重置筛选</button>
               <span class="filter-count">{{ filteredRules.length + filteredSources.length }} / {{ state.rules.length + httpSources.length }} 条</span>
             </div>
-            <ConfigSources :entries="filteredSources" @saved="sourceSaved" @edit="editSource" />
+            <ConfigSources rule-editor :busy="busy || !!pendingSource" :pending="pendingSource" @preview="previewSource" @disable="changeSource($event, false)" @remove="changeSource($event, true)" @rule="openSourceRule" @copy="copyProxyAddress" :entries="filteredSources" @saved="sourceSaved" @edit="editSource" />
             <RuleGroups ref="groupPanel" :groups="ruleGroups" :rules="state.rules" :certificates="state.certificates"
               :selected="selectedGroup" :busy="busy" :default-port="state.settings.default_http_port"
               :save="saveRuleGroup" :remove="deleteRuleGroup" @select="selectedGroup = $event" />
@@ -1244,23 +1320,18 @@ onBeforeUnmount(() => {
                         <div class="rule-name">{{ rule.name }}</div>
                       </td>
                       <td>
-                        <div v-for="domain in rule.domains" :key="domain" class="proxy-entry">
-                          <span class="proxy-entry-url" :class="{ 'unsupported-entry': rule.listen_port < minListenPort }" :title="rule.listen_port < minListenPort ? '当前版本不支持此监听端口' : undefined">{{ formatRuleEntry(rule, domain) }}</span>
-                          <button type="button" class="icon-button proxy-entry-action" :disabled="domain === '*'" :aria-label="`复制入口 ${formatRuleEntry(rule, domain)}`" title="复制入口地址" @click="copyRuleEntry(rule, domain)"><PhCopy :size="16" aria-hidden="true" /></button>
-                          <a v-if="canOpenRuleEntry(domain)" class="icon-button proxy-entry-action" :href="formatRuleEntry(rule, domain)" target="_blank" rel="noopener noreferrer" :aria-label="`在新窗口打开 ${formatRuleEntry(rule, domain)}`" title="在新窗口打开"><PhArrowSquareOut :size="16" aria-hidden="true" /></a>
-                          <button v-else type="button" class="icon-button proxy-entry-action" disabled aria-label="通配符域名无法直接打开" title="通配符域名需替换为实际域名后访问"><PhArrowSquareOut :size="16" aria-hidden="true" /></button>
-                        </div>
+                        <ProxyAddress v-for="domain in rule.domains" :key="domain" :value="formatRuleEntry(rule, domain)" entry
+                          :openable="canOpenRuleEntry(domain)" :copy-disabled="domain === '*'" :unsupported="rule.listen_port < minListenPort" @copy="copyProxyAddress" />
                         <div v-if="!rule.domains.length" :class="{ 'unsupported-entry': rule.listen_port < minListenPort }" :title="rule.listen_port < minListenPort ? '当前版本不支持此监听端口' : undefined">{{ formatRuleEntry(rule) }}</div>
                       </td>
                       <td>
-                        <div class="proxy-entry">
-                          <span class="proxy-entry-url">{{ formatRuleBackend(rule) }}</span>
-                          <button type="button" class="icon-button proxy-entry-action" :aria-label="`复制转发服务 ${formatRuleBackend(rule)}`" title="复制转发服务地址" @click="copyProxyAddress(formatRuleBackend(rule), '转发服务地址')"><PhCopy :size="16" aria-hidden="true" /></button>
-                        </div>
+                        <ProxyAddress :value="formatRuleBackend(rule)" @copy="copyProxyAddress" />
                       </td>
                       <td>
                         <div class="table-actions">
-                          <button class="button ghost small" @click="showConfig(rule.id,rule.name)">复制 Nginx 配置</button>
+                          <button type="button" class="icon-button rule-config-copy" aria-label="复制 Nginx 配置" @click="showConfig(rule.id, rule.name)">
+                            <PhCopy :size="16" aria-hidden="true" />
+                          </button>
                           <button
                             class="button ghost small"
                             @click="openRule(rule)"
@@ -1532,7 +1603,8 @@ onBeforeUnmount(() => {
                 >
                   <PhCheckCircle :size="14" aria-hidden="true" />保存并应用
                 </button>
-                <button v-if="selectedCustomConfig" class="button secondary small" :disabled="busy" @click="openCustomConfig(selectedCustomConfig)">编辑自定义配置</button>
+                <button v-if="selectedCustomConfig" class="button secondary small" :disabled="busy" @click="parameterFile = selectedCustomConfig">编辑参数</button>
+                <button v-if="selectedCustomConfig" class="button ghost small" :disabled="busy" @click="openCustomConfig(selectedCustomConfig)">编辑源文件</button>
                 <button v-if="selectedCustomConfig" class="button danger-ghost small" :disabled="busy" @click="deleteCustomConfig(selectedCustomConfig)">删除自定义配置</button>
                 <button class="button secondary small" :disabled="busy" @click="openCustomConfig()"><PhPlusCircle :size="14" />新建自定义配置</button>
               </header>
@@ -1583,6 +1655,7 @@ onBeforeUnmount(() => {
   <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
   <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
   <ConfigDialog v-if="importing || rulePreview" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
+  <SourceParameterDialog v-if="parameterFile" :entry="{ file: parameterFile, title: parameterFile.name }" @close="parameterFile = undefined" @saved="parameterFile = undefined; sourceSaved()" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">
       <header class="modal-header">
@@ -1642,6 +1715,7 @@ onBeforeUnmount(() => {
       <div class="modal-body">
         <RuleForm
           v-if="modal === 'rule'"
+          :source-file="sourceReplacement?.name"
           :rule="editingRule"
           :groups="ruleGroups"
           :initial-group="newRuleGroup"
@@ -1650,6 +1724,7 @@ onBeforeUnmount(() => {
           :upstream-pools="state!.upstream_pools"
           :rate-limits-enabled="menuEnabled('rate-limits')"
           :rate-limit-policies="state!.rate_limit_policies"
+          :manage-auth-profiles="menuEnabled('auth-profiles')"
           :auth-profiles="state!.auth_profiles ?? []"
           :busy="busy"
           @save="saveRule"
@@ -1685,8 +1760,8 @@ onBeforeUnmount(() => {
       >
         <header class="rate-limit-manager-header">
           <div>
-            <h2 id="rate-limit-manager-title">添加限流策略</h2>
-            <p>创建可供代理规则复用的限流参数，关闭后继续编辑当前规则。</p>
+            <h2 id="rate-limit-manager-title">{{ editingRateLimitPolicy ? "编辑限流策略" : "添加限流策略" }}</h2>
+            <p v-if="editingRateLimitPolicy">保存并应用后，引用此策略的规则都会使用新设置。</p>
           </div>
           <button
             type="button"
@@ -1700,12 +1775,9 @@ onBeforeUnmount(() => {
         </header>
         <div class="rate-limit-manager-body">
           <RateLimitPolicyManager
-            :policies="state?.rate_limit_policies ?? []"
-            :rules="state?.rules ?? []"
+            :policy="editingRateLimitPolicy"
             :busy="busy"
-            :create-new="rateLimitManagerCreateNew"
             @save="saveRateLimitPolicy"
-            @remove="removeRateLimitPolicy"
             @close="rateLimitManagerOpen = false"
           />
         </div>

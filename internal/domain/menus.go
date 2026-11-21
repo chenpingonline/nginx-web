@@ -35,7 +35,7 @@ func MenuRuntimeState(state State) State {
 func validateMenus(state State) error {
 	for _, id := range state.Settings.HiddenMenus {
 		switch id {
-		case "dashboard", "rules", "gateway", "streams", "upstreams", "rate-limits", "certificates", "errors", "topology", "waf", "logs", "backup", "revisions", "config":
+		case "dashboard", "rules", "gateway", "streams", "upstreams", "auth-profiles", "rate-limits", "certificates", "errors", "topology", "waf", "logs", "backup", "revisions", "config":
 		default:
 			return fmt.Errorf("无法隐藏菜单 %q", id)
 		}

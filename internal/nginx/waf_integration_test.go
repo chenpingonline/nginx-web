@@ -62,13 +62,15 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 	listen := reserved.Addr().(*net.TCPAddr).Port
 	reserved.Close()
 	var sites strings.Builder
-	for i, mode := range []string{"detect", "block", "off", "excepted"} {
+	for i, mode := range []string{"detect", "block", "off", "excepted", "upload"} {
 		id := fmt.Sprintf("%016x", i+1)
 		r := domain.ProxyRule{ID: id, Enabled: true, Name: mode, Domains: []string{mode + ".example.net"}, ListenPort: listen, UpstreamScheme: "http", UpstreamHost: upstream.Hostname(), UpstreamPort: port}
 		domain.NormalizeRule(&r, domain.DefaultState().Settings)
 		var instances []domain.WAFInstance
 		if mode == "block" || mode == "excepted" {
 			instances = []domain.WAFInstance{{ID: "0000000000000002", Mode: "block", Sites: []string{"0000000000000002", "0000000000000004"}, Exclusions: map[string][]int{"0000000000000004": {911100}}}}
+		} else if mode == "upload" {
+			instances = []domain.WAFInstance{{ID: "0000000000000002", Mode: "block", Sites: []string{id}, BodyLimitMiB: 1, BodyLimitAction: "partial", UploadSites: []string{id}}}
 		} else if mode != "off" {
 			instances = []domain.WAFInstance{{ID: id, Mode: mode, Sites: []string{id}}}
 		}
@@ -79,7 +81,7 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 		sites.WriteString(site)
 	}
 	conf := fmt.Sprintf(`daemon off; master_process off; pid %s/pid; error_log stderr; events {} http {
- access_log off; map $host $fnproxy_rule_id {default default;} map $request_id $fnproxy_waf_checked {default 0;}
+ client_body_temp_path temp/body; proxy_temp_path temp/proxy; access_log off; map $host $fnproxy_rule_id {default default;} map $request_id $fnproxy_waf_checked {default 0;}
  map $http_host $fnproxy_client_host {default $http_host;} map $http_upgrade $connection_upgrade {default upgrade; '' close;}
  %s }`, root, sites.String())
 	file := filepath.Join(root, "nginx.conf")
@@ -119,6 +121,9 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 	}{
 		{"detect", "BREW", "text/plain", "hello", 200}, {"block", "BREW", "text/plain", "hello", 403},
 		{"excepted", "BREW", "application/json", "{}", 200}, {"block", "BREW", "application/json", "{}", 403}, {"excepted", "BREW", "text/plain", "hello", 403},
+		{"upload", "PROPFIND", "application/xml", "", 200}, {"block", "PROPFIND", "application/xml", "", 403},
+		{"upload", "PUT", "application/octet-stream", strings.Repeat("z", (1<<20)+500), 200},
+		{"upload", "POST", "application/json", `{"title":`, 400},
 		{"off", "BREW", "text/plain", "hello", 200}, {"block", "POST", "application/json", `{"title":"hello"}`, 200},
 		{"detect", "POST", "application/json", `{"title":`, 200}, {"block", "POST", "application/json", `{"title":`, 400},
 	} {
@@ -136,7 +141,7 @@ func TestWAFProxyModesWithRealNginx(t *testing.T) {
 		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != tc.want {
-			t.Fatalf("%s %s status=%d body=%s events=%+v", tc.mode, tc.method, resp.StatusCode, data, inspector.Events())
+			t.Fatalf("%s %s status=%d body=%.256s events=%+v", tc.mode, tc.method, resp.StatusCode, data, inspector.Events())
 		}
 		if tc.want == 200 {
 			if string(data) != tc.method+" "+uri+" "+body || received.Load() != before+1 {

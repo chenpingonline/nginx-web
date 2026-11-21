@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ type NginxStatus = domain.NginxStatus
 type ApplyResult = domain.ApplyResult
 
 type AppService struct {
+	topologyCustom       topologyCustomCache
 	WAF                  waf.Inspector
 	paths                Paths
 	store                *Store
@@ -436,6 +438,7 @@ func (s *AppService) DeleteRule(id string) error {
 					if site == id {
 						p.Sites = append(p.Sites[:j], p.Sites[j+1:]...)
 						delete(p.Exclusions, id)
+						p.UploadSites = slices.DeleteFunc(p.UploadSites, func(site string) bool { return site == id })
 						break
 					}
 				}

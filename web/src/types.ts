@@ -8,6 +8,7 @@ export type Page =
   | "gateway"
   | "streams"
   | "upstreams"
+  | "auth-profiles"
   | "rate-limits"
   | "certificates"
   | "logs"
@@ -152,6 +153,8 @@ export interface LocationSettings {
   cache: CacheSettings;
   allow: string[];
   deny: string[];
+  proxy_http_version?: "1.0" | "1.1";
+  explicit_proxy_headers?: boolean;
   request_headers: HeaderSetting[];
   response_headers: HeaderSetting[];
   basic_auth: boolean;
@@ -329,7 +332,7 @@ export interface StreamRule extends StreamRuleInput {
   updated_at: string;
 }
 export interface GatewayRoute { id: string; name: string; path: string; target: string; enabled: boolean; compatibility?: "" | "subpath" | "ikuai-v4"; trust_first_certificate?: boolean; tls_fingerprint?: string; tls_trust_target?: string; }
-export interface WAFInstance {exclusions?:Record<string,number[]>;id:string;name:string;mode:"detect"|"block";sites:string[]}
+export interface WAFInstance {body_limit_mib?: number; body_limit_action?: "reject" | "partial"; upload_sites?: string[]; exclusions?:Record<string,number[]>;id:string;name:string;mode:"detect"|"block";sites:string[]}
 export interface State {
  waf_instances?:WAFInstance[];
   gateway_routes?: GatewayRoute[];

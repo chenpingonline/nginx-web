@@ -7,9 +7,9 @@ func menuForEndpoint(path string) string {
 	switch resource {
 	case "gateway-apps", "gateway-probe", "gateway-routes":
 		return "gateway"
-	case "rules", "rule-groups", "auth-profiles":
+	case "rules", "rule-groups":
 		return "rules"
-	case "streams", "upstreams", "logs", "backup", "revisions", "config", "topology", "waf":
+	case "auth-profiles", "streams", "upstreams", "logs", "backup", "revisions", "config", "topology", "waf":
 		return resource
 	case "rate-limit-policies":
 		return "rate-limits"

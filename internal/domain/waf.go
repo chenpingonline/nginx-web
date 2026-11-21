@@ -9,12 +9,18 @@ import (
 	"github.com/chenpingonline/nginx-web/internal/crscatalog"
 )
 
+const DefaultWAFBodyMiB = 8
+const MaxWAFBodyMiB = 128
+
 type WAFInstance struct {
-	Exclusions map[string][]int `json:"exclusions,omitempty"`
-	ID         string           `json:"id"`
-	Name       string           `json:"name"`
-	Mode       string           `json:"mode"`
-	Sites      []string         `json:"sites"`
+	BodyLimitMiB    int              `json:"body_limit_mib,omitempty"`
+	BodyLimitAction string           `json:"body_limit_action,omitempty"`
+	UploadSites     []string         `json:"upload_sites,omitempty"`
+	Exclusions      map[string][]int `json:"exclusions,omitempty"`
+	ID              string           `json:"id"`
+	Name            string           `json:"name"`
+	Mode            string           `json:"mode"`
+	Sites           []string         `json:"sites"`
 }
 
 func validateWAF(state State) error {
@@ -31,6 +37,14 @@ func validateWAF(state State) error {
 		ids[p.ID] = true
 		if p.Mode != "detect" && p.Mode != "block" {
 			return errors.New("未知的 WAF 模式")
+		}
+		if p.BodyLimitMiB < 0 || p.BodyLimitMiB > MaxWAFBodyMiB || (p.BodyLimitAction != "" && p.BodyLimitAction != "reject" && p.BodyLimitAction != "partial") {
+			return errors.New("请求体检查上限或超限处理无效")
+		}
+		for _, site := range p.UploadSites {
+			if !slices.Contains(p.Sites, site) {
+				return errors.New("上传兼容仅适用于已绑定站点")
+			}
 		}
 		for site, rules := range p.Exclusions {
 			if !slices.Contains(p.Sites, site) {

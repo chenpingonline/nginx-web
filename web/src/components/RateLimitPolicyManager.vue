@@ -1,17 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, toRaw } from "vue";
-import type { ProxyRule, RateLimitPolicy, RateLimitPolicyInput } from "../types";
+import type { RateLimitPolicy, RateLimitPolicyInput } from "../types";
 import HelpHint from "./HelpHint.vue";
 
 const props = defineProps<{
-  policies: RateLimitPolicy[];
-  rules: ProxyRule[];
+  policy?: RateLimitPolicy;
   busy: boolean;
-  createNew?: boolean;
 }>();
 const emit = defineEmits<{
   save: [value: RateLimitPolicyInput, id: string, done: (saved?: RateLimitPolicy, error?: string) => void];
-  remove: [policy: RateLimitPolicy];
   close: [];
 }>();
 
@@ -28,7 +25,10 @@ const blank = (): RateLimitPolicyInput => ({
 });
 const message = ref("");
 const messageError = ref(false);
-const form = reactive<RateLimitPolicyInput>(blank());
+const form = reactive<RateLimitPolicyInput>(props.policy
+  ? { name: props.policy.name, settings: { ...props.policy.settings } }
+  : blank());
+const policyID = ref(props.policy?.id ?? "");
 const requestOutcome = computed(() => {
   const rate = Number(form.settings.requests_per_second) || 0;
   const burst = Number(form.settings.burst) || 0;
@@ -49,9 +49,10 @@ function submit() {
   message.value = "";
   messageError.value = false;
   form.settings.enabled = true;
-  emit("save", structuredClone(toRaw(form)), "", savedResult);
+  emit("save", structuredClone(toRaw(form)), policyID.value, savedResult);
 }
 function savedResult(saved?: RateLimitPolicy, error?: string) {
+  if (saved) policyID.value = saved.id;
   message.value = error ?? "";
   messageError.value = Boolean(error);
   if (saved && !error) emit("close");

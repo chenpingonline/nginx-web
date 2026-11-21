@@ -20,21 +20,22 @@ import (
 	"github.com/corazawaf/coraza/v3/types"
 )
 
-const requestBodyLimit = 8 << 20
+const requestBodyLimit = domain.DefaultWAFBodyMiB << 20
 
 type Event struct {
-	BodyLimit bool      `json:"body_limit,omitempty"`
-	Time      time.Time `json:"time"`
-	Client    string    `json:"client"`
-	Host      string    `json:"host"`
-	Path      string    `json:"path"`
-	Instance  string    `json:"instance"`
-	Site      string    `json:"site"`
-	Rules     []int     `json:"rules"`
-	Blocked   bool      `json:"blocked"`
+	PartialBody bool      `json:"partial_body,omitempty"`
+	BodyLimit   bool      `json:"body_limit,omitempty"`
+	Time        time.Time `json:"time"`
+	Client      string    `json:"client"`
+	Host        string    `json:"host"`
+	Path        string    `json:"path"`
+	Instance    string    `json:"instance"`
+	Site        string    `json:"site"`
+	Rules       []int     `json:"rules"`
+	Blocked     bool      `json:"blocked"`
 }
 type Inspector struct {
-	engines [2]struct {
+	engines [4]struct {
 		once   sync.Once
 		engine coraza.WAF
 		err    error
@@ -63,7 +64,23 @@ func (i *Inspector) store(e Event) {
 	}
 }
 func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	mode, excluded, hasExclusions := strings.Cut(r.Header.Get("X-Fnproxy-Mode"), ":")
+	profile, policy, configured := strings.Cut(r.Header.Get("X-Fnproxy-Mode"), "|")
+	mode, excluded, hasExclusions := strings.Cut(profile, ":")
+	limit := int64(requestBodyLimit)
+	action, upload := "reject", false
+	if configured {
+		values := strings.Split(policy, "|")
+		if len(values) != 3 {
+			http.Error(w, "无效的请求体策略", 400)
+			return
+		}
+		mib, err := strconv.Atoi(values[0])
+		if err != nil || mib < 1 || mib > domain.MaxWAFBodyMiB || (values[1] != "reject" && values[1] != "partial") || (values[2] != "true" && values[2] != "false") {
+			http.Error(w, "无效的请求体策略", 400)
+			return
+		}
+		limit, action, upload = int64(mib)<<20, values[1], values[2] == "true"
+	}
 	instance := r.Header.Get("X-Fnproxy-Instance")
 	site := r.Header.Get("X-Fnproxy-Site")
 	if !domain.ValidID(instance) || !domain.ValidID(site) || (mode != "block" && mode != "detect") {
@@ -79,7 +96,7 @@ func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		resume += "_" + strconv.FormatUint(branch, 10)
 	}
-	engine, err := i.engine(mode)
+	engine, err := i.engine(mode, upload)
 	if err != nil {
 		http.Error(w, "WAF 引擎不可用", 503)
 		return
@@ -117,15 +134,33 @@ func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	interrupt := tx.ProcessRequestHeaders()
-	if interrupt == nil && r.ContentLength >= requestBodyLimit {
+	oversize := r.ContentLength > limit
+	partial := false
+	if interrupt == nil && oversize && action == "reject" {
 		interrupt = &types.Interruption{Status: http.StatusRequestEntityTooLarge}
 	}
 	if interrupt == nil && r.Body != nil && r.Body != http.NoBody {
+		prefix := &io.LimitedReader{R: r.Body, N: limit}
 		var err error
-		interrupt, _, err = tx.ReadRequestBodyFrom(r.Body)
+		interrupt, _, err = tx.ReadRequestBodyFrom(prefix)
+		if err == nil && prefix.N == 0 && !oversize {
+			var n int64
+			n, err = io.CopyN(io.Discard, r.Body, 1)
+			if err == io.EOF {
+				err = nil
+			}
+			oversize = n > 0
+		}
 		if err != nil {
 			http.Error(w, "请求体检测失败", 503)
 			return
+		}
+		if interrupt == nil && oversize {
+			if action == "reject" {
+				interrupt = &types.Interruption{Status: http.StatusRequestEntityTooLarge}
+			} else {
+				partial = true
+			}
 		}
 	}
 	if interrupt == nil {
@@ -136,10 +171,10 @@ func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	oversize := interrupt != nil && interrupt.Status == http.StatusRequestEntityTooLarge
+
 	// Nginx has already buffered the original request. Drain the inspection
 	// copy so that closing the Unix connection cannot interrupt its final reply.
-	if interrupt != nil && r.Body != nil {
+	if (interrupt != nil || oversize) && r.Body != nil {
 		if _, err := io.Copy(io.Discard, r.Body); err != nil {
 			http.Error(w, "读取请求体失败", 503)
 			return
@@ -162,7 +197,7 @@ func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if len(path) > 512 {
 			path = path[:512]
 		}
-		i.store(Event{BodyLimit: oversize, Time: time.Now().UTC(), Client: client, Host: r.Host, Path: path, Instance: instance, Site: site, Rules: rules, Blocked: blocked})
+		i.store(Event{PartialBody: partial, BodyLimit: oversize, Time: time.Now().UTC(), Client: client, Host: r.Host, Path: path, Instance: instance, Site: site, Rules: rules, Blocked: blocked})
 	}
 	if blocked {
 		status := interrupt.Status
@@ -176,13 +211,20 @@ func (i *Inspector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (i *Inspector) engine(mode string) (coraza.WAF, error) {
+func (i *Inspector) engine(mode string, upload bool) (coraza.WAF, error) {
 	slot := 0
 	engineMode := "DetectionOnly"
 	if mode == "block" {
 		slot = 1
 		engineMode = "On"
 
+	}
+	var compatibility string
+	if upload {
+		slot += 2
+		// Extend CRS protocol policy for DAV clients. Body and URI inspection stay active.
+		compatibility = `SecAction "id:10001,phase:1,pass,nolog,setvar:'tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE PROPFIND PROPPATCH MKCOL MOVE COPY LOCK UNLOCK',setvar:'tx.restricted_headers_basic=/content-encoding/ /proxy/ /x-http-method-override/ /x-http-method/ /x-method-override/ /x-middleware-subrequest/ /expect/'"
+SecRule REQUEST_METHOD "@rx ^(?:PUT|PATCH|POST)$" "id:10002,phase:1,pass,nolog,ctl:ruleRemoveById=920420"`
 	}
 	e := &i.engines[slot]
 	e.once.Do(func() {
@@ -194,7 +236,8 @@ SecRequestBodyLimitAction Reject
 SecResponseBodyAccess Off
 SecAuditEngine Off
 Include @crs-setup.conf.example
-Include @owasp_crs/*.conf`, engineMode, requestBodyLimit)
+%s
+Include @owasp_crs/*.conf`, engineMode, (domain.MaxWAFBodyMiB<<20)+1, compatibility)
 		e.engine, e.err = coraza.NewWAF(coraza.NewWAFConfig().WithRootFS(crs.FS).WithDirectives(directives))
 		if e.err != nil {
 			log.Printf("WAF 引擎初始化失败: %v", e.err)
