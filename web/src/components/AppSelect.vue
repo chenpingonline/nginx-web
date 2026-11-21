@@ -145,7 +145,7 @@ onBeforeUnmount(() => { close(); clearTimeout(searchTimer); });
 .app-select-options::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 .app-select-search-wrap { position: relative; flex: 0 0 auto; margin: 2px 3px 6px; }
 .app-select-search { box-sizing: border-box; width: 100%; height: var(--control-height); padding: 4px 28px 4px 30px; border: 1px solid var(--line); border-radius: 7px; outline: none; background: var(--surface-soft); color: var(--text); font: inherit; }
-.app-select-search:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
+.app-select-search:focus { border-color: var(--accent); }
 .app-select-search::-webkit-search-cancel-button { cursor: pointer; }
 .app-select-search-icon { position: absolute; left: 11px; top: 7px; width: 10px; height: 10px; border: 1.5px solid var(--text-muted); border-radius: 50%; pointer-events: none; }
 .app-select-search-icon::after { content: ''; position: absolute; width: 5px; height: 1.5px; right: -4px; bottom: -2px; border-radius: 999px; background: var(--text-muted); transform: rotate(45deg); transform-origin: left center; }

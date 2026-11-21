@@ -85,7 +85,7 @@ func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 		}
 		return ApplyResult{}, false, nil
 	}
-	candidate := domain.CloneState(base)
+	candidate := domain.CloneState(gatewayBaseline(base, draft))
 	domain.PauseUnsupportedPorts(&candidate)
 	candidate.RuntimeMinListenPort = domain.MinListenPort
 	candidate.RuntimeConfigVersion = runtimeConfigVersion

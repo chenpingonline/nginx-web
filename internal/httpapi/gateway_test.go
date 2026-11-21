@@ -33,24 +33,7 @@ func gatewayTestAPI(t *testing.T, target string) (*API, *service.AppService, pla
 	if err != nil {
 		t.Fatal(err)
 	}
-	route, err := svc.SaveGatewayRoute("", domain.GatewayRoute{Name: "test", Path: "music", Target: target, Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Simulate the persisted applied state, not the uncommitted draft.
-	state := svc.State()
-	state.Dirty = false
-	now := time.Now().UTC()
-	state.LastAppliedAt = &now
-	state.GatewayRoutes = []domain.GatewayRoute{route}
-	raw, _ := json.Marshal(state)
-	if err := os.WriteFile(paths.StateFile, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(paths.AppliedState(), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	svc, err = service.New(paths)
+	_, err = svc.SaveGatewayRoute("", domain.GatewayRoute{Name: "test", Path: "music", Target: target, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,15 +159,15 @@ func TestGatewayAuthorizationDraftDeletionAndRestart(t *testing.T) {
 	if err := svc.DeleteGatewayRoute(svc.State().GatewayRoutes[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if w := gatewayRequest(api, "GET", gatewayPrefix+"/proxy/music/", ""); w.Body.String() != "real-upstream" {
-		t.Fatal("draft changed applied routing")
+	if w := gatewayRequest(api, "GET", gatewayPrefix+"/proxy/music/", ""); w.Code != http.StatusNotFound {
+		t.Fatal("deleted route still forwarded")
 	}
 	restarted, err := service.New(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := gatewayRequest(New(restarted, webassets.Assets), "GET", gatewayPrefix+"/proxy/music/", ""); w.Body.String() != "real-upstream" {
-		t.Fatal("restart activated draft deletion")
+	if w := gatewayRequest(New(restarted, webassets.Assets), "GET", gatewayPrefix+"/proxy/music/", ""); w.Code != http.StatusNotFound {
+		t.Fatal("restart restored deleted route")
 	}
 	backup, err := svc.ExportBackup()
 	if err != nil {

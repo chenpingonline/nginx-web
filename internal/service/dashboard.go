@@ -64,14 +64,14 @@ func (s *AppService) appliedState(state State) (State, bool) {
 			return State{}, false
 		}
 		if domain.ValidateRuntimePorts(applied) == nil {
-			return applied, true
+			return gatewayBaseline(applied, state), true
 		}
 	}
 	// Upgrade path: successful revisions already contain the last applied state.
 	if revisions, err := s.ListRevisions(); err == nil && state.LastAppliedAt != nil {
 		for _, revision := range revisions {
 			if revision.State.LastAppliedAt != nil && revision.State.LastAppliedAt.Equal(*state.LastAppliedAt) && domain.ValidateRuntimePorts(revision.State) == nil {
-				return revision.State, true
+				return gatewayBaseline(revision.State, state), true
 			}
 		}
 	}

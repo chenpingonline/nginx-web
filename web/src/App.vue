@@ -113,12 +113,6 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     groupLabel: "代理配置",
   },
   {
-    id: "gateway",
-    icon: "http",
-    label: "飞牛网关",
-    subtitle: "通过飞牛访问域名按路径转发 HTTP 服务",
-  },
-  {
     id: "streams",
     icon: "stream",
     label: "TCP/UDP 代理",
@@ -141,6 +135,13 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     icon: "certificate",
     label: "SSL/TLS 证书",
     subtitle: "管理证书导入、ACME 申请与自动续期",
+  },
+  {
+    id: "gateway",
+    icon: "http",
+    label: "飞牛网关",
+    subtitle: "通过飞牛访问域名按路径转发 HTTP 服务",
+    groupLabel: "网关",
   },
   {id:"waf",icon:"certificate",label:"WAF 防火墙",subtitle:"管理站点防护实例与命中日志", groupLabel: "监控分析" },
   {id:"topology",icon:"stream",label:"网络拓扑",subtitle:"查看代理流量与活动访客"},
@@ -1127,7 +1128,7 @@ onBeforeUnmount(() => {
             @overview="overview = $event" @edit="openDashboardRule"
           />
           <BackupPage v-else-if="page === 'backup'" :state="state" :busy="busy" @download="downloadBackup" @restore="restoreBackup" @apply="applyConfiguration" />
-          <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" :dirty="state.dirty" :busy="busy" @refresh="loadCore(true)" @apply="applyConfiguration" />
+          <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" :busy="busy" @refresh="loadCore(true)" />
           <template v-else-if="page === 'streams'">
             <StreamRulesPage
               :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @preview="(r)=>showConfig(r.id,r.name,true)"

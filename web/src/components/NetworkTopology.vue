@@ -312,10 +312,9 @@ onBeforeUnmount(() => {
       >
       </div>
     </div>
-    <div v-if="showFilter || sankey" class="tools">
+    <div v-if="showFilter" class="tools">
       <AppSelect
         class="select"
-        v-if="showFilter"
         aria-label="筛选监听"
         v-model="listenerFilter"
         ><option value="">全部监听</option>
@@ -323,27 +322,6 @@ onBeforeUnmount(() => {
           {{ l }}
         </option></AppSelect
       >
-      <div
-        v-if="sankey"
-        class="metric-switch"
-        role="group"
-        aria-label="流量带宽度"
-      >
-        <button
-          class="button"
-          :aria-pressed="metric === 'hits'"
-          @click="metric = 'hits'"
-        >
-          请求数
-        </button>
-        <button
-          class="button"
-          :aria-pressed="metric === 'bytes'"
-          @click="metric = 'bytes'"
-        >
-          响应流量
-        </button>
-      </div>
     </div>
     <div v-if="replay" class="tools">
       <label
@@ -361,6 +339,27 @@ onBeforeUnmount(() => {
     </p>
     <p v-if="frame?.limited">当前流量超过采样容量，显示最近 8192 条请求。</p>
     <div class="stats">
+      <div
+        v-if="sankey"
+        class="metric-switch"
+        role="group"
+        aria-label="流量带宽度"
+      >
+        <button
+          type="button"
+          :aria-pressed="metric === 'hits'"
+          @click="metric = 'hits'"
+        >
+          请求数
+        </button>
+        <button
+          type="button"
+          :aria-pressed="metric === 'bytes'"
+          @click="metric = 'bytes'"
+        >
+          响应流量
+        </button>
+      </div>
       <strong>{{ (graph.nodes[0].hits / 60).toFixed(2) }} 次/秒</strong
       ><span>{{ (graph.nodes[0].bytes / 61440).toFixed(2) }} KiB/s</span
       ><span v-if="frame?.connections != null"
@@ -678,7 +677,32 @@ onBeforeUnmount(() => {
 }
 .metric-switch {
   display: inline-flex;
-  gap: 2px;
+  flex: none;
+  padding: 2px;
+  margin-inline-end: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+.metric-switch button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.metric-switch button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--accent-dark);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 14%);
+  font-weight: 600;
+}
+.metric-switch button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .plot g {
   cursor: pointer;

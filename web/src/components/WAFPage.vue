@@ -139,8 +139,10 @@ onBeforeUnmount(() => {
             </td>
             <td>{{ p.sites?.map(siteName).join("、") || "尚未绑定" }}</td>
             <td>
-              <button class="button" @click="edit(p)">编辑</button>
-              <button class="button" @click="edit(p, true)">删除</button>
+              <div class="instance-actions">
+                <button class="button" @click="edit(p)">编辑</button>
+                <button class="button danger-ghost" @click="edit(p, true)">删除</button>
+              </div>
             </td>
           </tr>
           <tr v-if="!instances.length">
@@ -255,7 +257,7 @@ onBeforeUnmount(() => {
       <footer>
         <button type="button" class="button" :disabled="saving" @click="draft = undefined">
           取消</button
-        ><button class="button primary" :disabled="saving">
+        ><button class="button" :class="deleting ? 'danger' : 'primary'" :disabled="saving">
           {{ deleting ? "删除并保存草稿" : "保存草稿" }}
         </button>
       </footer>
@@ -318,6 +320,10 @@ footer {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.instance-actions {
+  display: inline-flex;
+  gap: 8px;
 }
 .scroll {
   overflow: auto;

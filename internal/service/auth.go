@@ -28,7 +28,8 @@ type AuthProfileInput struct {
 }
 
 func (s *AppService) initializeAppliedAuth() {
-	state := s.store.Snapshot()
+	current := s.store.Snapshot()
+	state := current
 	if data, err := os.ReadFile(s.paths.AppliedState()); err == nil && !state.PortMigrationPending {
 		var applied State
 		if json.Unmarshal(data, &applied) == nil {
@@ -43,7 +44,7 @@ func (s *AppService) initializeAppliedAuth() {
 	}
 	s.setAppliedAuthProfiles(state.AuthProfiles)
 	s.setAppliedMenus(state.Settings.HiddenMenus)
-	s.setAppliedGatewayRoutes(state.GatewayRoutes)
+	s.setAppliedGatewayRoutes(gatewayBaseline(state, current).GatewayRoutes)
 }
 
 func (s *AppService) setAppliedAuthProfiles(profiles []domain.AuthProfile) {

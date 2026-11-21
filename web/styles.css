@@ -198,7 +198,7 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .rule-filters.compact-rule-toolbar .select { flex-basis: 112px; width: 112px; }
 .rule-filters.compact-rule-toolbar .filter-count { font-size: 12px; }
 .textarea { height: var(--textarea-height); min-height: var(--textarea-height); padding: 5px 10px; resize: vertical; line-height: 18px; }
-.input:focus, .select:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(35,163,122,.11); }
+.input:focus, .select:focus, .textarea:focus { border-color: var(--accent); }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: var(--control-font-size); font-weight: 500; }
 .field-help { font-size: 12px; color: var(--text-muted); line-height: 1.45; }

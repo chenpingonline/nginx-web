@@ -154,6 +154,7 @@ func configurationContent(state State) State {
 	state = domain.CloneState(state)
 	domain.ApplyStateDefaults(&state)
 	// Storage format versions are not user configuration changes.
+	state.LiveGatewayRoutes = nil
 	state.SchemaVersion = 0
 	state.RuntimeConfigVersion = 0
 	state.RuntimeMinListenPort = 0

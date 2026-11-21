@@ -32,7 +32,7 @@ func TestDecorateGatewayAppsAvoidsDuplicatesAndPathConflicts(t *testing.T) {
 	}
 }
 
-func TestGatewayDraftValidationAndBackupRoundTrip(t *testing.T) {
+func TestGatewayImmediateActivationAndBackupRoundTrip(t *testing.T) {
 	svc := testService(t)
 	route, err := svc.SaveGatewayRoute("", domain.GatewayRoute{Name: " Music ", Path: "/MUSIC/", Target: "http://127.0.0.1:4533/", Enabled: true})
 	if err != nil {
@@ -41,8 +41,8 @@ func TestGatewayDraftValidationAndBackupRoundTrip(t *testing.T) {
 	if route.Path != "music" || route.Name != "Music" || route.Target != "http://127.0.0.1:4533" {
 		t.Fatalf("normalization: %+v", route)
 	}
-	if _, ok := svc.GatewayRoute("music"); ok {
-		t.Fatal("draft route activated")
+	if _, ok := svc.GatewayRoute("music"); !ok {
+		t.Fatal("saved route did not activate")
 	}
 	if _, err := svc.SaveGatewayRoute("", route); err == nil {
 		t.Fatal("duplicate path saved")
@@ -84,13 +84,20 @@ func TestGatewayDraftValidationAndBackupRoundTrip(t *testing.T) {
 	if err := svc.DeleteGatewayRoute(route.ID); err != nil {
 		t.Fatal(err)
 	}
+	if svc.State().Dirty {
+		t.Fatal("deleting a gateway dirtied Nginx configuration")
+	}
+	if err := svc.updateState(func(state *State) error { state.Settings.HiddenMenus = []string{"logs"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.DiscardDraft(); err != nil {
 		t.Fatal(err)
 	}
-	if len(svc.State().GatewayRoutes) != 1 {
-		t.Fatal("discard lost applied route")
+	restarted, err := New(svc.paths)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := svc.GatewayRoute("music"); !ok {
-		t.Fatal("discard stopped applied route")
+	if _, ok := restarted.GatewayRoute("music"); ok || len(restarted.State().GatewayRoutes) != 0 {
+		t.Fatal("discard or restart reversed the live deletion")
 	}
 }

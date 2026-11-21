@@ -650,6 +650,7 @@ func (s *AppService) recordAppliedState(state State, result ApplyResult, summary
 	now := time.Now().UTC()
 	// Persist the exact candidate sent to Nginx, not a newer concurrent draft.
 	applied := domain.CloneState(state)
+	applied.LiveGatewayRoutes = nil
 	applied.Dirty = false
 	applied.DraftRevisionID = ""
 	applied.LastAppliedAt = &now
@@ -665,6 +666,7 @@ func (s *AppService) recordAppliedState(state State, result ApplyResult, summary
 	s.setAppliedMenus(applied.Settings.HiddenMenus)
 	s.setAppliedGatewayRoutes(applied.GatewayRoutes)
 	if err := s.updateState(func(current *State) error {
+		current.LiveGatewayRoutes = nil
 		current.LastAppliedAt = &now
 		current.PortMigrationPending = false
 		current.RuntimeConfigVersion = runtimeConfigVersion
@@ -801,6 +803,8 @@ func (s *AppService) ListRevisions() ([]Revision, error) {
 }
 
 func (s *AppService) RestoreRevision(id string) (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if strings.ContainsAny(id, `/\\`) || len(id) > 80 {
 		return State{}, errors.New("配置历史 ID 不合法")
 	}
@@ -817,6 +821,7 @@ func (s *AppService) RestoreRevision(id string) (State, error) {
 	// Imported certificate material is global and secret; restoring an old
 	// revision must never silently delete certificates added later.
 	next.Certificates = current.Certificates
+	next.LiveGatewayRoutes = current.LiveGatewayRoutes
 	next.Dirty = true
 	next.DraftRevisionID = revision.ID
 	next.LastApplyError = ""

@@ -93,6 +93,7 @@ type CertificateMeta struct {
 
 type State struct {
 	WAFInstances         []WAFInstance     `json:"waf_instances,omitempty"`
+	LiveGatewayRoutes    *[]GatewayRoute   `json:"live_gateway_routes,omitempty"` // Local activation since the last full apply; an empty array records the last deletion.
 	GatewayRoutes        []GatewayRoute    `json:"gateway_routes"`
 	RuntimeConfigVersion int               `json:"runtime_config_version,omitempty"`
 	RuntimeMinListenPort int               `json:"runtime_min_listen_port,omitempty"`
@@ -354,6 +355,11 @@ func ValidateState(state State) error {
 	}
 	if err := validateMenus(state); err != nil {
 		return err
+	}
+	if state.LiveGatewayRoutes != nil {
+		if err := ValidateGatewayRoutes(*state.LiveGatewayRoutes); err != nil {
+			return err
+		}
 	}
 	if err := ValidateGatewayRoutes(state.GatewayRoutes); err != nil {
 		return err

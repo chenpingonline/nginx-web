@@ -38,6 +38,7 @@ func (s *AppService) ExportBackup() (Backup, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	backup := Backup{Format: "nginx-web-backup", Version: 1, AppVersion: domain.AppVersion, CreatedAt: time.Now().UTC(), State: s.store.Snapshot(), Certificates: []BackupCertificate{}}
+	backup.State.LiveGatewayRoutes = nil
 	for _, meta := range backup.State.Certificates {
 		if !domain.ValidID(meta.ID) {
 			return Backup{}, errors.New("证书 ID 不合法")

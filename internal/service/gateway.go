@@ -78,41 +78,57 @@ func (s *AppService) SaveGatewayRoute(id string, input domain.GatewayRoute) (dom
 	} else {
 		input.ID = id
 	}
-	err := s.updateState(func(state *State) error {
-		if id == "" {
-			state.GatewayRoutes = append(state.GatewayRoutes, input)
-		} else {
-			found := false
-			for i := range state.GatewayRoutes {
-				if state.GatewayRoutes[i].ID == id {
-					state.GatewayRoutes[i] = input
-					found = true
-					break
-				}
-			}
-			if !found {
-				return errors.New("找不到指定网关规则")
-			}
-		}
-		state.Dirty = true
-		return nil
-	})
-	return input, err
+	return input, s.changeGatewayRoute(input.ID, &input, id != "")
 }
 
 func (s *AppService) DeleteGatewayRoute(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.updateState(func(state *State) error {
-		for i, r := range state.GatewayRoutes {
-			if r.ID == id {
-				state.GatewayRoutes = append(state.GatewayRoutes[:i], state.GatewayRoutes[i+1:]...)
-				state.Dirty = true
-				return nil
+	return s.changeGatewayRoute(id, nil, true)
+}
+
+// Update the selected route in both lists in one durable write. Other restored
+// or legacy draft routes retain their previous activation state.
+func (s *AppService) changeGatewayRoute(id string, route *domain.GatewayRoute, requireExisting bool) error {
+	edit := func(routes []domain.GatewayRoute) []domain.GatewayRoute {
+		for i := range routes {
+			if routes[i].ID == id {
+				if route == nil {
+					return slices.Delete(routes, i, i+1)
+				}
+				routes[i] = *route
+				return routes
 			}
 		}
-		return errors.New("找不到指定网关规则")
+		if route != nil {
+			routes = append(routes, *route)
+		}
+		return routes
+	}
+	s.authMu.RLock()
+	live := append([]domain.GatewayRoute{}, s.appliedGatewayRoutes...)
+	s.authMu.RUnlock()
+	live = edit(live)
+	err := s.updateState(func(state *State) error {
+		if requireExisting && !slices.ContainsFunc(state.GatewayRoutes, func(r domain.GatewayRoute) bool { return r.ID == id }) {
+			return errors.New("找不到指定网关规则")
+		}
+		state.GatewayRoutes = edit(state.GatewayRoutes)
+		state.LiveGatewayRoutes = &live
+		return nil
 	})
+	if err == nil {
+		s.setAppliedGatewayRoutes(live)
+	}
+	return err
+}
+
+func gatewayBaseline(base, current State) State {
+	if current.LiveGatewayRoutes != nil {
+		base.GatewayRoutes = *current.LiveGatewayRoutes
+	}
+	base.LiveGatewayRoutes = current.LiveGatewayRoutes
+	return base
 }
 
 func (s *AppService) setAppliedGatewayRoutes(routes []domain.GatewayRoute) {

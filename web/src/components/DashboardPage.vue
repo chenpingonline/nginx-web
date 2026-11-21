@@ -330,7 +330,7 @@ h2 { font-size: 16px; font-weight: 600; }
 .dashboard-search { display: flex; gap: 8px; align-items: center; width: 260px; min-width: min(260px, 100%); max-width: 100%; height: var(--control-height); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: #707b88; background: #fff; }
 .dashboard-search > svg { flex-shrink: 0; }
 .dashboard-search input { border: 0; background: transparent; outline: 0; width: 100%; min-width: 0; color: var(--text); font-size: var(--control-font-size); }
-.dashboard-search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dashboard-search:focus-within { border-color: var(--accent); }
 .protocol-tabs { display: flex; width: max-content; max-width: calc(100% - 40px); margin: 12px 20px 12px; border: 1px solid var(--line); border-radius: 7px; overflow-x: auto; }
 .protocol-tabs button { position: relative; padding: 5px 14px; border: 1px solid transparent; background: transparent; color: #647180; border-radius: 6px; font-size: 14px; line-height: 16px; white-space: nowrap; }
 .protocol-tabs button.active { border-color: var(--accent); background: #f4fcf7; color: var(--accent-dark); }
