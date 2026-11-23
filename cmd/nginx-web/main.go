@@ -48,7 +48,14 @@ func main() {
 	case "serve":
 		fatalIf(application.Serve())
 	case "init":
-		result, err := appService.Prepare()
+		var previous string
+		if len(os.Args) > 2 {
+			if len(os.Args) != 4 || os.Args[2] != "--upgrade-from" {
+				log.Fatal("用法: init [--upgrade-from VERSION]")
+			}
+			previous = os.Args[3]
+		}
+		result, err := appService.PrepareUpgrade(previous)
 		fatalIf(err)
 		printJSON(result)
 	case "nginx-start":

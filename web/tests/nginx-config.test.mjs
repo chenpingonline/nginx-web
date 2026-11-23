@@ -40,6 +40,23 @@ test("multi-server import, unsupported directives and ambiguous upstream URI", (
   );
 });
 
+test("preserve a proxy_pass root URI independently for each location", () => {
+  const content = `server {
+    listen 19080;
+    server_name files.test;
+    location /files/ { proxy_pass http://127.0.0.1:9000/; expires 30m; add_header Cache-Control public always; }
+    location = /keep { proxy_pass https://[::1]; }
+    location / { return 404; }
+  }`;
+  const rule = importBlocks(content, "").rules[0];
+  assert.equal(rule.root_location.return_code, 404);
+  assert.deepEqual(rule.locations.map(l => l.settings.proxy_pass_trailing_slash), [true, false]);
+  const rootProxy = importBlocks(content.replace("return 404;", "proxy_pass https://[::1]/;"), "").rules[0];
+  assert.equal(rootProxy.root_location.proxy_pass_trailing_slash, true);
+  assert.equal(rootProxy.root_location.upstream_port, 443);
+  assert.throws(() => importBlocks(content.replace("location /files/", "location ~ /files/"), ""), /proxy_pass/);
+});
+
 test("edit only selected server parameters and preserve surrounding source", async () => {
   const { parameterGroups, editParameters } = await import("../src/nginxConfig.ts");
   const content = '# test\nserver { listen 9090 ssl; server_name a b; location / { proxy_set_header X "a;b"; proxy_pass http://old; # note\ninclude custom; } }\nserver { location / { proxy_pass http://old; } }\n';
@@ -138,5 +155,20 @@ test("editing a custom rule replaces only its UTF-8 block and retains its tracki
     const { content, end } = updateSourceBlock(source, rendered);
     assert.equal(content, prefix + original.replace("9091", "9092") + suffix);
     assert.equal(end, Buffer.byteLength(content.slice(0, -suffix.length)));
+  }
+});
+
+test("plain HTTP configuration restores advanced location handlers and hostname order", () => {
+  for (const [directives, backend] of [
+    ["grpc_pass grpcs://127.0.0.1:9000;", "grpc"],
+    ["set $memcached_key $uri; memcached_pass 127.0.0.1:9000;", "memcached"],
+    ["stub_status;", "status"],
+    ["return 302 https://other.test$request_uri;", "return"],
+    ["alias /srv/files/; autoindex on;", "static"],
+  ]) {
+    const config = `server { listen 9002; server_name z.test a.test; location / { ${directives} } }`;
+    const rule = importBlocks(config, "").rules[0];
+    assert.deepEqual(rule.domains, ["z.test", "a.test"]);
+    assert.equal(rule.root_location.backend_type, backend);
   }
 });

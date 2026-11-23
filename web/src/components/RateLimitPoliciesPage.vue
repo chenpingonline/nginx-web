@@ -18,6 +18,9 @@ const props = defineProps<{
   busy: boolean;
 }>();
 const emit = defineEmits<{
+  importConfig: [];
+  exportConfig: [id: string, name: string];
+
   save: [value: RateLimitPolicyInput, id: string, done: (saved?: RateLimitPolicy, error?: string) => void];
   remove: [policy: RateLimitPolicy];
   refresh: [];
@@ -88,6 +91,7 @@ function savedResult(saved?: RateLimitPolicy, error?: string) {
   saveError.value = error ?? "";
   if (saved && !error) open.value = false;
 }
+defineExpose({ show });
 </script>
 
 <template>
@@ -100,6 +104,7 @@ function savedResult(saved?: RateLimitPolicy, error?: string) {
       <PhArrowClockwise :size="16" aria-hidden="true" />刷新
     </button>
     <button v-if="analysisEnabled" class="button ghost" @click="emit('inspect')">查看请求分析</button>
+    <button class="button ghost" @click="$emit('importConfig')">从 Nginx 配置导入</button>
     <button class="button primary" @click="show()">
       <PhPlusCircle :size="17" aria-hidden="true" />添加限流策略
     </button>
@@ -133,6 +138,7 @@ function savedResult(saved?: RateLimitPolicy, error?: string) {
             <td>{{ usageCount(policy.id) }} 条规则</td>
             <td>
               <div class="table-actions">
+                <button class="button ghost small" @click="$emit('exportConfig', policy.id, policy.name)">复制配置</button>
                 <button class="button ghost small" @click="show(policy)">
                   编辑</button
                 ><button

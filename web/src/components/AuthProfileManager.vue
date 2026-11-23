@@ -13,11 +13,14 @@ const passwordVisible = ref<boolean[]>([]);
 const form = reactive<AuthProfileInput>({ name: "", realm: "", users: [] });
 
 const editingID = ref("");
+const importID = ref("");
 function show(profile?: AuthProfile) {
-  editingID.value = profile?.id ?? "";
+  const existing = props.profiles.find(p => p.id === profile?.id);
+  editingID.value = existing?.id ?? "";
+  importID.value = existing ? "" : profile?.id ?? "";
   form.name = profile?.name ?? "";
   form.realm = profile?.realm ?? "";
-  form.users = profile?.users.map(({ id, username, enabled }) => ({ id, username, enabled, password: "" })) ?? [];
+  form.users = profile?.users.map(({ id, username, enabled }) => ({ id:existing?.users.some(u=>u.id===id) ? id : undefined, username, enabled, password: "" })) ?? [];
   passwordVisible.value = form.users.map(() => false);
   message.value = "";
   open.value = true;
@@ -36,7 +39,7 @@ async function save() {
   message.value = "";
   try {
     const id = editingID.value;
-    const saved = await request<AuthProfile>(id ? `/auth-profiles/${id}` : "/auth-profiles", {
+    const saved = await request<AuthProfile>(id ? `/auth-profiles/${id}` : importID.value ? `/auth-profiles?import_id=${encodeURIComponent(importID.value)}` : "/auth-profiles", {
       method: id ? "PUT" : "POST",
       body: jsonBody(form),
     });

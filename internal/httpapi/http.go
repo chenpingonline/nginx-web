@@ -266,7 +266,11 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		profile, err := a.service.CreateAuthProfile(input)
+		id := r.URL.Query().Get("import_id")
+		if id == "" {
+			id = domain.RandomID()
+		}
+		profile, err := a.service.CreateAuthProfileWithID(id, input)
 		writeResult(w, http.StatusCreated, profile, err)
 	case strings.HasPrefix(apiPath, "/api/auth-profiles/"):
 		a.handleAuthProfile(w, r, strings.TrimPrefix(apiPath, "/api/auth-profiles/"))
@@ -531,6 +535,36 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		writeResult(w, http.StatusOK, revisions, err)
 	case strings.HasPrefix(apiPath, "/api/revisions/"):
 		a.handleRevision(w, r, strings.TrimPrefix(apiPath, "/api/revisions/"))
+	case apiPath == "/api/config-form" && r.Method == http.MethodGet:
+		content, err := a.service.ExportForm(r.URL.Query().Get("kind"), r.URL.Query().Get("id"))
+		writeResult(w, http.StatusOK, map[string]string{"content": content}, err)
+	case apiPath == "/api/config-form/preview" && r.Method == http.MethodPost:
+		var f appservice.ConfigForm
+		if !decodeJSON(w, r, &f) {
+			return
+		}
+		form, content, err := a.service.PreviewForm(f)
+		var exported string
+		if err == nil {
+			exported, err = appservice.EncodeForm(form, content)
+		}
+		writeResult(w, http.StatusOK, map[string]any{"form": form, "content": content, "exported": exported}, err)
+	case apiPath == "/api/config-form/create" && r.Method == http.MethodPost:
+		var f appservice.ConfigForm
+		if !decodeJSON(w, r, &f) {
+			return
+		}
+		result, err := a.service.CreateImportedForm(f)
+		writeResult(w, http.StatusCreated, result, err)
+	case apiPath == "/api/config-form" && r.Method == http.MethodPost:
+		var input struct {
+			Content string `json:"content"`
+		}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		form, err := a.service.ReadForm(input.Content)
+		writeResult(w, http.StatusOK, form, err)
 	case apiPath == "/api/config-import/source-block" && r.Method == http.MethodDelete:
 		var src appservice.ImportSource
 		if !decodeJSON(w, r, &src) {

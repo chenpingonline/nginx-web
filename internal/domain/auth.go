@@ -49,7 +49,11 @@ func NormalizeAuthProfile(profile *AuthProfile) {
 	}
 }
 
-func ValidateAuthProfile(profile AuthProfile) error {
+func ValidateAuthProfile(profile AuthProfile) error { return validateAuthProfile(profile, true) }
+
+// ValidatePublicAuthProfile checks the editable copy before the user supplies any missing passwords.
+func ValidatePublicAuthProfile(profile AuthProfile) error { return validateAuthProfile(profile, false) }
+func validateAuthProfile(profile AuthProfile, requireHash bool) error {
 	if !ValidID(profile.ID) {
 		return errors.New("认证策略 ID 格式不正确")
 	}
@@ -77,7 +81,7 @@ func ValidateAuthProfile(profile AuthProfile) error {
 			return fmt.Errorf("认证用户名 %q 重复", user.Username)
 		}
 		usernames[key] = struct{}{}
-		if user.PasswordHash == "" {
+		if requireHash && user.PasswordHash == "" {
 			return fmt.Errorf("认证用户 %q 缺少密码", user.Username)
 		}
 	}

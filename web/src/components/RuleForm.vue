@@ -111,7 +111,7 @@ function locationSummary(settings: LocationSettings) {
   if (settings.backend_type === "status") return "连接状态";
   const pool = props.upstreamPools.find(pool => pool.id === settings.upstream_pool_id);
   const target = settings.upstream_pool_id ? (pool?.name || "转发服务组") : `${settings.upstream_host}:${settings.upstream_port}`;
-  return `${settings.backend_type === "proxy" ? "反向代理" : settings.backend_type.toUpperCase()} → ${target}`;
+  return `${settings.backend_type === "proxy" ? "反向代理" : settings.backend_type.toUpperCase()} → ${target}${settings.backend_type === "proxy" && settings.proxy_pass_trailing_slash ? "/" : ""}`;
 }
 const inheritanceOptions: { key: GroupField; label: string }[] = [
   { key: "listen_type", label: "监听类型" },
@@ -230,6 +230,12 @@ watch(
     form.root_location = rule?.root_location
       ? JSON.parse(JSON.stringify(rule.root_location))
       : defaultLocation();
+    if (rule?.root_location && ["proxy","grpc","fastcgi","uwsgi","scgi","memcached"].includes(rule.root_location.backend_type)) {
+      form.upstream_pool_id = rule.root_location.upstream_pool_id || "";
+      form.upstream_scheme = rule.root_location.upstream_scheme;
+      form.upstream_host = rule.root_location.upstream_host || rule.upstream_host;
+      form.upstream_port = rule.root_location.upstream_port || rule.upstream_port;
+    }
     form.root_location.redirect_to_https = false;
     form.locations = rule?.locations
       ? JSON.parse(JSON.stringify(rule.locations))
@@ -271,15 +277,20 @@ function parseBackendAddress(value: string) {
     return { upstream_host: url.hostname.replace(/^\[|\]$/g, ''), upstream_port: port, upstream_scheme: url.protocol === 'https:' ? 'https' as const : 'http' as const };
   } catch { return null; }
 }
+function applyBackendAddress(parsed: NonNullable<ReturnType<typeof parseBackendAddress>>, raw: string) {
+  Object.assign(form, parsed);
+  if (form.root_location.backend_type === 'proxy') form.root_location.proxy_pass_trailing_slash = raw.trim().endsWith('/');
+}
 function normalizeBackendAddress() {
   const parsed = parseBackendAddress(form.upstream_host);
-  if (parsed) Object.assign(form, parsed);
+  if (parsed) applyBackendAddress(parsed, form.upstream_host);
 }
 function pasteBackendAddress(event: ClipboardEvent) {
-  const parsed = parseBackendAddress(event.clipboardData?.getData('text') || '');
+  const raw = event.clipboardData?.getData('text') || '';
+  const parsed = parseBackendAddress(raw);
   if (!parsed) return;
   event.preventDefault();
-  Object.assign(form, parsed);
+  applyBackendAddress(parsed, raw);
 }
 function submit() {
   if (form.authentication.enabled && !form.authentication.profile_id) {
@@ -514,12 +525,12 @@ async function addLocation() {
       <div class="path-summary"><strong>{{ location.path || "未填写路径" }}</strong><span>{{ locationSummary(location.settings) }}</span></div>
       <div class="location-head">
         <input v-model.trim="location.name" class="input" placeholder="名称" required maxlength="80" />
-        <AppSelect v-model="location.match" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="regex">正则</option></AppSelect>
+        <AppSelect v-model="location.match" @update:model-value="value => { if (value === 'regex') location.settings.proxy_pass_trailing_slash = false; }" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="regex">正则</option></AppSelect>
         <input v-model="location.path" class="input" placeholder="/api/" aria-label="自定义路径" required />
         <label class="checkbox-row"><input v-model="location.enabled" type="checkbox" />启用</label>
         <button type="button" class="button danger compact" @click="form.locations.splice(index, 1)">删除</button>
       </div>
-      <LocationSettingsEditor :model="location.settings" :upstream-pools="upstreamPools" :rule-auth-enabled="form.authentication.enabled" />
+      <LocationSettingsEditor :model="location.settings" :regex="location.match === 'regex'" :upstream-pools="upstreamPools" :rule-auth-enabled="form.authentication.enabled" />
     </div>
     </section>
     </div>

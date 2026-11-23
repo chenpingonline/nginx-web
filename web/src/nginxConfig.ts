@@ -263,7 +263,7 @@ export function matchSource(
   );
 }
 
-function newID() {
+export function newID() {
   return Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) =>
     n.toString(16).padStart(2, "0"),
   ).join("");
@@ -279,6 +279,13 @@ const timeoutKeys = new Map<
   ["proxy_connect_timeout", "connect_timeout_seconds"],
   ["proxy_send_timeout", "send_timeout_seconds"],
 ]);
+const commonParams = ["QUERY_STRING $query_string", "REQUEST_METHOD $request_method", "CONTENT_TYPE $content_type", "CONTENT_LENGTH $content_length"];
+const requestParams = ["REQUEST_URI $request_uri", "SERVER_PROTOCOL $server_protocol", "REMOTE_ADDR $remote_addr"];
+const gatewayParams: Record<string,string[]> = {
+  fastcgi: [...commonParams, "SCRIPT_FILENAME $document_root$fastcgi_script_name", ...requestParams, "SERVER_NAME $server_name"],
+  uwsgi: [...commonParams, ...requestParams, "SERVER_NAME $server_name"],
+  scgi: ["CONTENT_LENGTH $content_length", "SCGI 1", "REQUEST_METHOD $request_method", "REQUEST_URI $request_uri", "QUERY_STRING $query_string", ...requestParams.slice(1)],
+};
 function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.html"]) {
   const [, ...args] = node.words;
   const path = args[args.length - 1];
@@ -299,19 +306,48 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
   )
     unsupported(node);
   const settings: Partial<LocationSettings> = { backend_type: "proxy" };
-  const isProxy = node.children.some(d => d.words[0] === "proxy_pass");
-  const localRoot = node.children.find(d => d.words[0] === "root");
+  const handler = node.children.find(d => ["proxy_pass","grpc_pass","fastcgi_pass","uwsgi_pass","scgi_pass","memcached_pass","stub_status","return"].includes(d.words[0]));
+  const kind = handler?.words[0];
+  const isProxy = kind === "proxy_pass";
+  const localRoot = node.children.find(d => d.words[0] === "root" || d.words[0] === "alias");
   if (localRoot) {
     const value = localRoot.words[1];
-    if (isProxy || localRoot.words.length !== 2 || !value.startsWith("/") || value.includes("$")) unsupported(localRoot);
+    if (handler || localRoot.words.length !== 2 || !value.startsWith("/") || value.includes("$")) unsupported(localRoot);
     staticRoot = value;
   }
   if (isProxy) settings.explicit_proxy_headers = true;
-  else if (staticRoot) Object.assign(settings, {backend_type: "static", static_path: staticRoot, index_files: indexFiles});
+  else if (handler) {
+    const [name, value, target] = handler.words;
+    if (handler.children) unsupported(handler);
+    if (name === "return" && /^[2-5]\d{2}$/.test(value) && handler.words.length <= 3) {
+      Object.assign(settings, {backend_type: "return", return_code: Number(value), return_target: target ?? ""});
+    } else if (name === "stub_status" && handler.words.length === 1) settings.backend_type = "status";
+    else if (name.endsWith("_pass") && handler.words.length === 2) {
+      const address = /^(?:(grpcs?):\/\/)?(\[[\da-fA-F:]+\]|[\w.-]+)(?::(\d+))?$/.exec(value);
+      if (!address || (name === "grpc_pass") !== !!address[1]) unsupported(handler);
+      const pool = /^fnproxy_up_([a-f0-9]+)$/.exec(address[2]);
+      if (!address[3] && !pool) unsupported(handler);
+      Object.assign(settings,{backend_type:name.slice(0,-5),upstream_scheme:address[1] === "grpcs" ? "https" : "http",
+        upstream_host:address[2].replace(/^\[|\]$/g,""),upstream_port:Number(address[3] || 0),upstream_pool_id:pool?.[1] ?? ""});
+    } else unsupported(handler);
+  } else if (staticRoot) Object.assign(settings, {backend_type:"static", static_path:staticRoot, static_alias:localRoot?.words[0] === "alias", index_files:indexFiles});
   else unsupported(node);
+  const params: string[] = [];
   const seen = new Set<string>();
   for (const d of node.children) {
     const [name, value] = d.words;
+    if (d === handler && !isProxy) continue;
+    if (!d.children && name === settings.backend_type + "_param" && ["fastcgi","uwsgi","scgi"].includes(settings.backend_type ?? "")) {
+      params.push(d.words.slice(1).join(" ")); continue;
+    }
+    if (!d.children && settings.backend_type === "memcached" && d.words.join(" ") === "set $memcached_key $uri" && !seen.has("memcached_key")) { seen.add("memcached_key"); continue; }
+    if (!d.children && (name === "allow" || name === "deny") && d.words.length === 2) {
+      if (name === "allow" && settings.deny?.length) unsupported(d);
+      (settings[name] ??= []).push(value); continue;
+    }
+    if (!d.children && name === "rewrite" && d.words.length === 4 && ["last","break","redirect","permanent"].includes(d.words[3])) {
+      (settings.rewrites ??= []).push({pattern:value,replacement:d.words[2],flag:d.words[3] as "last"|"break"|"redirect"|"permanent"}); continue;
+    }
     if (name === "add_header" || name === "proxy_set_header") {
       const [, header, content, flag] = d.words;
       const response = name === "add_header";
@@ -334,33 +370,42 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
       continue;
     }
     if (d.children || seen.has(name)) unsupported(d);
-    if (!isProxy && name === "root") {
+    if (d === localRoot) {
       seen.add(name);
       continue;
     }
-    if (!isProxy && name === "index" && d.words.length > 1) {
+    if (settings.backend_type === "static" && name === "index" && d.words.length > 1) {
       settings.index_files = d.words.slice(1);
       seen.add(name);
       continue;
     }
-    if (!isProxy && name === "try_files" && d.words.length >= 3) {
+    if (settings.backend_type === "static" && name === "try_files" && d.words.length >= 3) {
       settings.try_files = d.words.slice(1);
       seen.add(name);
       continue;
     }
     if (d.words.length !== 2) unsupported(d);
     seen.add(name);
-    if (name === "proxy_pass") {
+    if (name === "autoindex" && settings.backend_type === "static" && ["on","off"].includes(value)) settings.autoindex = value === "on";
+    else if (name === "ssi" && ["on","off"].includes(value)) settings.ssi = value === "on";
+    else if (name === "auth_request") settings.auth_request = value;
+    else if (name === "auth_basic" && value !== "off") Object.assign(settings, {basic_auth:true,basic_auth_realm:value});
+    else if (name === "auth_basic_user_file") settings.basic_auth_file = value;
+    else if (name === "proxy_ssl_server_name" && isProxy && ["on","off"].includes(value)) settings.proxy_ssl_server_name = value === "on";
+    else if (name === "proxy_ssl_name" && isProxy && value === node.children.find(d=>d.words[0]==="proxy_pass")?.words[1]?.match(/^https:\/\/(\[[^\]]+\]|[^:/]+)/)?.[1].replace(/^\[|\]$/g,"")) continue;
+    else if (name === "proxy_ssl_verify" && isProxy && value === "off") continue;
+    else if (name === "proxy_pass") {
       const target =
-        /^(https?):\/\/(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?$/.exec(
+        /^(https?):\/\/(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?(\/?)$/.exec(
           value,
         );
       // Bare names may refer to an upstream group in a different file.
       if (
-        !target ||
+        !target || (match === "regex" && !!target[4]) ||
         (!target[3] && !target[2].includes(".") && !target[2].startsWith("["))
       )
         unsupported(d);
+      settings.proxy_pass_trailing_slash = !!target[4];
       settings.upstream_scheme = target[1] as "http" | "https";
       settings.upstream_host = target[2].replace(/^\[|\]$/g, "");
       settings.upstream_port = Number(
@@ -368,7 +413,7 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
       );
     } else if (isProxy && name === "proxy_http_version" && (value === "1.1" || value === "1.0")) {
       settings.proxy_http_version = value;
-    } else if (name === "expires") settings.expires = value;
+    } else if (name === "expires" && (isProxy || settings.backend_type === "static")) settings.expires = value;
     else {
       const key = timeoutKeys.get(name);
       const duration = /^(\d+)(s|m|h)?$/.exec(value);
@@ -379,6 +424,12 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     }
   }
 
+  const defaults = gatewayParams[settings.backend_type ?? ""];
+  if (defaults && (params.length !== defaults.length || params.some((p,i) => p !== defaults[i]))) unsupported(node);
+  if (settings.backend_type === "memcached" && !seen.has("memcached_key")) unsupported(node);
+  if (settings.basic_auth_file && !settings.basic_auth) unsupported(node);
+  if (settings.upstream_scheme === "https" && isProxy && settings.proxy_ssl_server_name === undefined)
+    settings.proxy_ssl_server_name = false;
   return { id: newID(), name: path, path, match, enabled: true, settings };
 }
 export function importBlocks(source: string, target: string) {
@@ -395,12 +446,24 @@ export function importBlocks(source: string, target: string) {
       domains: string[] = [];
     const families = new Set<string>();
     const paths: Directive[] = [];
+    let tls: boolean | undefined, catchAll: boolean | undefined, http2 = false, cert = "", key = "", tracking = "", redirectPort = 0;
     let staticRoot = "", indexFiles: string[] | undefined, bodyLimit: number | undefined;
     for (const d of block.children) {
       const [name, value] = d.words;
       if (name === "location") paths.push(d);
       else if (d.children) unsupported(d);
-      else if (name === "listen" && d.words.length === 2) {
+      else if (name === "set" && d.words.length === 3 && value === "$fnproxy_rule_id" && !tracking && /^[a-f0-9]{12,64}$/.test(d.words[2])) tracking = d.words[2];
+      else if (name === "http2" && value === "on" && d.words.length === 2 && !http2) http2 = true;
+      else if (name === "ssl_certificate" && !cert && d.words.length === 2) cert = value;
+      else if (name === "ssl_certificate_key" && !key && d.words.length === 2) key = value;
+      else if (name === "return" && value === "308" && d.words.length === 3 && !redirectPort) {
+        const target = /^https:\/\/\$host(?::([0-9]+))?\$request_uri$/.exec(d.words[2]);
+        if (!target) unsupported(d);
+        redirectPort = Number(target[1] || 443);
+      } else if (name === "listen" && d.words.slice(2).every(option=>option==="ssl" || option==="default_server")) {
+        const secure = d.words.includes("ssl"), fallback = d.words.includes("default_server");
+        if ((tls !== undefined && tls !== secure) || (catchAll !== undefined && catchAll !== fallback)) unsupported(d);
+        tls = secure; catchAll = fallback;
         const address = /^(?:(0\.0\.0\.0|\[::\]):)?([1-9]\d*)$/.exec(value);
         if (!address) unsupported(d);
         const family = address[1] === "[::]" ? "ipv6" : "ipv4";
@@ -423,30 +486,34 @@ export function importBlocks(source: string, target: string) {
         domains = d.words.slice(1);
       else unsupported(d);
     }
+    const certID = cert.match(/\/([a-f0-9]{12,64})\/fullchain\.pem$/)?.[1];
+    if (tls ? !certID || key !== cert.replace(/fullchain\.pem$/, "privkey.pem") : !!(cert || key || http2))
+      fail(block.line, "HTTPS 规则需要目标机已导入的证书和匹配的私钥路径");
+    if (catchAll && domains.join(" ") !== "_") fail(block.line,"默认站点域名无法完整还原");
     const locations = paths.map(path => convertLocation(path, staticRoot, indexFiles));
     if ((staticRoot || indexFiles) && !locations.some(l => l.settings.backend_type === "static"))
       fail(block.line, "静态目录和首页需要对应的静态文件路径");
     const roots = locations.filter(
       (l) => l.path === "/" && l.match === "prefix",
     );
-    if (!port || !domains.length || roots.length !== 1)
+    if (!port || !domains.length || (redirectPort ? paths.length > 0 : roots.length !== 1))
       fail(
         block.line,
         "结构化导入需要明确的 listen、server_name 和一个根代理路径",
       );
-    const root = roots[0].settings;
+    const root: Partial<LocationSettings> = roots[0]?.settings ?? {};
     return {
-      id: newID(),
-      enabled: true,
-      name: domains[0],
-      domains,
+      id: tracking || newID(),
+      enabled: true, tls: !!tls, http2, certificate_id: certID || "", redirect_to_https: !!redirectPort,
+      redirect_https_port: redirectPort || 443, name: domains[0],
+      domains: catchAll ? ["*"] : domains,
       listen_port: port,
       listen_type: families.size === 2 ? "dual" : families.has("ipv6") ? "ipv6" : "ipv4",
       client_max_body_mb: bodyLimit ?? 1,
       connect_timeout_seconds: 60, read_timeout_seconds: 60, send_timeout_seconds: 60,
       upstream_host: root.upstream_host ?? "127.0.0.1",
       upstream_port: root.upstream_port ?? 8080,
-      upstream_scheme: root.upstream_scheme,
+      upstream_scheme: root.upstream_scheme, upstream_pool_id: root.upstream_pool_id,
       root_location: root,
       locations: locations.filter((l) => l !== roots[0]),
     };
@@ -475,6 +542,23 @@ export function sourceBlock(entry: SourceEntry) {
   return { raw, source, nodes: block.children };
 }
 
+// A versioned export comment belongs to the immediately following server only.
+export function formSourceBlock(entry: SourceEntry) {
+  const block = sourceBlock(entry);
+  const prefix = entry.file.content.slice(0,entry.start);
+  const header = /(?:^|\n)((?:# nginx-web-form-v1 [A-Za-z0-9+/]+\r?\n)+)[ \t]*$/.exec(prefix)?.[1];
+  if (!header) return {...block, annotated:false};
+  const start = prefix.lastIndexOf(header);
+  return {...block, annotated:true, raw:entry.file.content.slice(start,entry.start) + block.raw,
+    source:{...block.source,start:new TextEncoder().encode(prefix.slice(0,start)).length}};
+}
+export function replaceSourceRange(source: ReturnType<typeof sourceBlock>["source"], block: string) {
+  const encoder = new TextEncoder(), decoder = new TextDecoder("utf-8", {ignoreBOM:true});
+  const bytes = encoder.encode(source.expected);
+  return { content:decoder.decode(bytes.subarray(0,source.start)) + block + decoder.decode(bytes.subarray(source.end)),
+    end:source.start+encoder.encode(block).length };
+}
+
 // Source ranges use UTF-8 offsets to match the server's optimistic concurrency check.
 export function updateSourceBlock(source: ReturnType<typeof sourceBlock>["source"], rendered: string) {
   const encoder = new TextEncoder();
@@ -484,8 +568,7 @@ export function updateSourceBlock(source: ReturnType<typeof sourceBlock>["source
   const tracking = parseConfig(original)[0].children?.find(n => n.words[0] === "set" && n.words[1] === "$fnproxy_rule_id");
   const trackingLine = tracking ? "    " + original.slice(tracking.start, tracking.end) + "\n" : "";
   const block = rendered.trimEnd().replace(/^    set \$fnproxy_rule_id [^;]+;\n/m, () => trackingLine);
-  const content = decoder.decode(bytes.subarray(0, source.start)) + block + decoder.decode(bytes.subarray(source.end));
-  return { content, end: source.start + encoder.encode(block).length };
+  return replaceSourceRange(source, block);
 }
 
 export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types").ProxyRule[]) {
@@ -517,7 +600,7 @@ export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types")
   const domains = args("server_name");
   const root = nodes.find(n => n.words[0] === "location" && n.words[1] === "/")?.children ?? [];
   const directive = (name: string) => root.find(n => n.words[0] === name)?.words[1];
-  const target = /^(https?):\/\/(\[[\da-f:]+\]|[\w.-]+):(\d+)$/i.exec(directive("proxy_pass") || "");
+  const target = /^(https?):\/\/(\[[\da-f:]+\]|[\w.-]+):(\d+)(\/?)$/i.exec(directive("proxy_pass") || "");
   const backend = target ? { upstream_scheme: target[1], upstream_host: target[2].replace(/^\[|\]$/g, ""), upstream_port: Number(target[3]), upstream_pool_id: "" } : {};
   const cert = args("ssl_certificate")[0]?.match(/\/([^/]+)\/fullchain\.pem$/)?.[1] ?? "";
   const rule = {
@@ -532,7 +615,7 @@ export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types")
     connect_timeout_seconds: parseInt(directive("proxy_connect_timeout") || "0", 10),
     read_timeout_seconds: parseInt(directive("proxy_read_timeout") || "0", 10),
     send_timeout_seconds: parseInt(directive("proxy_send_timeout") || "0", 10),
-    ...backend, root_location: { ...original?.root_location, ...backend },
+    ...backend, root_location: { ...original?.root_location, ...backend, ...(target && { proxy_pass_trailing_slash: !!target[4] }) },
   };
   return { source, raw, rule, generated: true };
 }

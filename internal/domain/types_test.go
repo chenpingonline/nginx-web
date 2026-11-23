@@ -82,7 +82,7 @@ func TestNormalizeRule(t *testing.T) {
 	if rule.Name != "Demo" || rule.UpstreamScheme != "http" || rule.UpstreamHost != "::1" {
 		t.Fatalf("unexpected normalized rule: %#v", rule)
 	}
-	if len(rule.Domains) != 2 || rule.Domains[0] != "a.example.com" || rule.Domains[1] != "b.example.com" {
+	if len(rule.Domains) != 2 || rule.Domains[0] != "b.example.com" || rule.Domains[1] != "a.example.com" {
 		t.Fatalf("unexpected normalized domains: %#v", rule.Domains)
 	}
 	if rule.ListenPort != 9080 || rule.ConnectTimeoutSeconds != 10 {

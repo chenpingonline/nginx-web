@@ -12,6 +12,7 @@ const props = defineProps<{
   model: LocationSettings;
   upstreamPools: UpstreamPool[];
   root?: boolean;
+  regex?: boolean;
   ruleAuthEnabled?: boolean;
 }>();
 
@@ -79,6 +80,7 @@ const backendHelp = computed(() => ({
   status: "显示 Nginx 的活动连接和请求统计，请限制访问范围。",
 })[props.model.backend_type]);
 const pickingDirectory = ref(false);
+const trailingSlashId = useId();
 const staticAliasId = `static-alias-${useId()}`;
 const openingAuthorization = ref(false);
 const directoryError = ref("");
@@ -176,6 +178,12 @@ async function directoryAction(action: "select" | "authorize") {
         <div class="field"><label>目标端口</label><input v-model.number="model.upstream_port" class="input" type="number" min="1" max="65535" required /></div>
       </template>
     </template>
+
+    <div v-if="model.backend_type === 'proxy' && !regex" class="checkbox-row field">
+      <input :id="trailingSlashId" v-model="model.proxy_pass_trailing_slash" type="checkbox" />
+      <label :for="trailingSlashId">转发地址末尾添加 /</label>
+      <HelpHint text="将匹配到的路径替换为 /。例如在 /files/ 下，/files/a.jpg 会转发为 /a.jpg。" />
+    </div>
 
     <template v-if="model.backend_type === 'static'">
       <div class="field full">

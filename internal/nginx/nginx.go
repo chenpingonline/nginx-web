@@ -1374,12 +1374,23 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		builder.WriteString("        scgi_param SERVER_PROTOCOL $server_protocol;\n")
 		builder.WriteString("        scgi_param REMOTE_ADDR $remote_addr;\n")
 	case "memcached":
-		builder.WriteString("        memcached_key $uri;\n")
+		builder.WriteString("        set $memcached_key $uri;\n")
 		fmt.Fprintf(builder, "        memcached_pass %s;\n", renderHTTPBackend(settings, ""))
 	case "status":
 		builder.WriteString("        stub_status;\n")
 	default:
-		fmt.Fprintf(builder, "        proxy_pass %s;\n", renderHTTPBackend(settings, settings.UpstreamScheme))
+		target := renderHTTPBackend(settings, settings.UpstreamScheme)
+		if settings.ProxyPassTrailingSlash {
+			if waf == nil {
+				target += "/"
+			} else {
+				// Nginx forbids a URI in a named proxy location. Apply the same
+				// prefix replacement after inspection, retaining the query string.
+				pattern := "(?s)^" + regexp.QuoteMeta(path) + "(.*)$"
+				fmt.Fprintf(builder, "        rewrite %s /$1 break;\n", nginxDirectiveQuote(pattern))
+			}
+		}
+		fmt.Fprintf(builder, "        proxy_pass %s;\n", target)
 		m.renderProxySettings(builder, rule, settings, cacheID)
 	}
 	builder.WriteString("    }\n")
@@ -1403,6 +1414,18 @@ func renderHTTPBackend(settings domain.LocationSettings, scheme string) string {
 		return scheme + "://" + backend
 	}
 	return backend
+}
+
+func renderRateLimits(builder *strings.Builder, rule ProxyRule) {
+	if rule.RateLimit.Enabled {
+		fmt.Fprintf(builder, "        limit_req zone=fnproxy_req_%s burst=%d%s;\n", rule.ID, rule.RateLimit.Burst, map[bool]string{true: " nodelay", false: ""}[rule.RateLimit.NoDelay])
+		if rule.RateLimit.Connections > 0 {
+			fmt.Fprintf(builder, "        limit_conn fnproxy_conn_%s %d;\n", rule.ID, rule.RateLimit.Connections)
+		}
+		if rule.RateLimit.DownloadKBps > 0 {
+			fmt.Fprintf(builder, "        limit_rate %dk;\n", rule.RateLimit.DownloadKBps)
+		}
+	}
 }
 
 func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, settings domain.LocationSettings, cacheID string) {
@@ -1453,15 +1476,7 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 	if rule.Streaming {
 		builder.WriteString("        proxy_request_buffering off;\n")
 	}
-	if rule.RateLimit.Enabled {
-		fmt.Fprintf(builder, "        limit_req zone=fnproxy_req_%s burst=%d%s;\n", rule.ID, rule.RateLimit.Burst, map[bool]string{true: " nodelay", false: ""}[rule.RateLimit.NoDelay])
-		if rule.RateLimit.Connections > 0 {
-			fmt.Fprintf(builder, "        limit_conn fnproxy_conn_%s %d;\n", rule.ID, rule.RateLimit.Connections)
-		}
-		if rule.RateLimit.DownloadKBps > 0 {
-			fmt.Fprintf(builder, "        limit_rate %dk;\n", rule.RateLimit.DownloadKBps)
-		}
-	}
+	renderRateLimits(builder, rule)
 	if settings.Cache.Enabled {
 		fmt.Fprintf(builder, "        proxy_cache fnproxy_cache_%s;\n", cacheID)
 		fmt.Fprintf(builder, "        proxy_cache_valid %ds;\n", settings.Cache.ValidSeconds)
@@ -1482,7 +1497,7 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 		}
 	}
 	if settings.UpstreamScheme == "https" {
-		builder.WriteString("        proxy_ssl_server_name on;\n")
+		fmt.Fprintf(builder, "        proxy_ssl_server_name %s;\n", onOff(settings.ProxySSLServerName == nil || *settings.ProxySSLServerName))
 		sslName := settings.UpstreamHost
 		if settings.UpstreamPoolID != "" {
 			sslName = "$host"

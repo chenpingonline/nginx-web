@@ -5,7 +5,10 @@ import type { State, WAFInstance } from "../types";
 import WAFRuleTable from "./WAFRuleTable.vue";
 import AppSelect from "./AppSelect.vue";
 const props = defineProps<{ state: State; busy: boolean }>();
-const emit = defineEmits<{ refresh: []; apply: [] }>();
+const emit = defineEmits<{
+  importConfig: [];
+  exportConfig: [id: string, name: string];
+ refresh: []; apply: [] }>();
 interface Hit {
   body_limit?: boolean;
   partial_body?: boolean;
@@ -82,7 +85,9 @@ async function save() {
   saving.value = true;
   error.value = "";
   try {
-    await request("/waf/instances" + (p.id ? "/" + p.id : ""), {
+    if (p.id && !deleting.value && !instances.value.some(item => item.id === p.id)) {
+      await request("/config-form/create", {method:"POST",body:jsonBody({kind:"waf",id:p.id,value:{...p,exclusions,upload_sites}})});
+    } else await request("/waf/instances" + (p.id ? "/" + p.id : ""), {
       method: deleting.value ? "DELETE" : p.id ? "PUT" : "POST",
       body: deleting.value ? undefined : jsonBody({ ...p, exclusions, upload_sites }),
     });
@@ -111,6 +116,7 @@ onBeforeUnmount(() => {
   gone = true;
   clearTimeout(timer);
 });
+defineExpose({ edit });
 </script>
 <template>
   <section class="card waf">
@@ -125,7 +131,8 @@ onBeforeUnmount(() => {
         >
           应用配置
         </button>
-        <button class="button primary" @click="edit()">创建实例</button>
+        <button class="button ghost" @click="$emit('importConfig')">从 Nginx 配置导入</button>
+    <button class="button primary" @click="edit()">创建实例</button>
       </div>
     </header>
     <div class="scroll">
@@ -151,6 +158,7 @@ onBeforeUnmount(() => {
             <td>{{ p.sites?.map(siteName).join("、") || "尚未绑定" }}</td>
             <td>
               <div class="instance-actions">
+                <button class="button ghost small" @click="$emit('exportConfig', p.id, p.name)">复制配置</button>
                 <button class="button" @click="edit(p)">编辑</button>
                 <button class="button danger-ghost" @click="edit(p, true)">删除</button>
               </div>

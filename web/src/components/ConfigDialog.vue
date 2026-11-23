@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { configBody, formPrefix, matchSavedConfig, type ConfigForm } from "../configForm";
 import { importBlocks, parseConfig } from "../nginxConfig";
 import { request, jsonBody, errorMessage } from "../api";
 import type { ProxyRule } from "../types";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
+  state: import("../types").State;
   rules: ProxyRule[];
+  openForm: (value: ConfigForm) => Promise<void>;
   preview?: { content: string; name: string; draft: boolean };
 }>();
 const emit = defineEmits<{
@@ -68,13 +71,18 @@ async function run(save: boolean) {
   working.value = true;
   error.value = "";
   try {
-    if (save && candidate && generated.value.length) {
+    if (source.value.trimStart().startsWith(formPrefix)) {
+      const form = await request<ConfigForm>("/config-form", { method: "POST", body: jsonBody({content: source.value}) });
+      await props.openForm(form);
+    } else if (save && candidate && generated.value.length) {
       await request("/config-import/save", {
         method: "POST",
         body: jsonBody({ ...candidate, expected: generated.value }),
       });
       emit("saved");
     } else {
+      const existing = await matchSavedConfig(source.value, props.state);
+      if (existing) { await props.openForm(existing); return; }
       candidate = importBlocks(source.value, target.value);
       generated.value = await request<string[]>("/config-import/preview", {
         method: "POST",
@@ -105,7 +113,8 @@ async function run(save: boolean) {
       </div>
     </header>
     <template v-if="preview">
-      <pre>{{ preview.content }}</pre>
+      <pre>{{ configBody(preview.content) }}</pre>
+      <details v-if="preview.content.startsWith(formPrefix)"><summary>复制时包含的表单数据</summary><pre>{{ preview.content.slice(0, preview.content.indexOf(configBody(preview.content))) }}</pre></details>
       <details v-if="dependencies.length">
         <summary>迁移时需要的依赖（{{ dependencies.length }}）</summary>
         <p>仅在把这段配置复制到另一台 Nginx 时逐项核对。准备好依赖后，运行 <code>nginx -t</code> 校验，再重载并测试转发。</p>
@@ -128,7 +137,7 @@ async function run(save: boolean) {
         :disabled="working"
         spellcheck="false"
         maxlength="1048576"
-        placeholder="粘贴 server 或 location 块"
+        placeholder="粘贴复制的配置、server 或 location 块"
       ></textarea>
       <div v-if="isLocation" class="import-target">
         <label for="import-target">目标代理</label
@@ -177,7 +186,7 @@ async function run(save: boolean) {
             ? "处理中…"
             : generated.length
               ? "确认保存为草稿"
-              : "预览导入"
+              : source.trimStart().startsWith(formPrefix) ? "打开对应表单" : "预览导入"
         }}
       </button>
     </footer>

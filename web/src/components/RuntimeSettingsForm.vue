@@ -12,6 +12,9 @@ const props = defineProps<{
   dirty: boolean;
 }>();
 const emit = defineEmits<{
+  importConfig: [];
+  exportConfig: [id: string, name: string];
+
   save: [value: Settings];
   clearCache: [];
   test: [value: Settings];
@@ -20,16 +23,14 @@ const emit = defineEmits<{
 const form = reactive<Settings>(structuredClone(toRaw(props.settings)));
 const trusted = ref(""),
   gzipTypes = ref("");
-watch(
-  () => props.settings,
-  (value) => {
-    delete form.hidden_menus;
-    Object.assign(form, structuredClone(toRaw(value)));
-    trusted.value = value.real_ip.trusted_proxies.join("\n");
-    gzipTypes.value = value.gzip.types.join("\n");
-  },
-  { immediate: true, deep: true },
-);
+function restore(value: Settings) {
+  delete form.hidden_menus;
+  Object.assign(form, structuredClone(toRaw(value)));
+  trusted.value = value.real_ip.trusted_proxies.join("\n");
+  gzipTypes.value = value.gzip.types.join("\n");
+}
+watch(() => props.settings, restore, { immediate: true, deep: true });
+defineExpose({ restore });
 const tabs = ["常用设置", "客户端真实 IP", "压缩", "动态路由变量", "Worker 与文件资源", "TLS 与日志", "菜单设置"] as const;
 const activeTab = ref<typeof tabs[number]>("常用设置");
 function moveTab(event: KeyboardEvent, index: number) {
@@ -82,6 +83,7 @@ function addSplit() {
 </script>
 <template>
   <form class="settings-stack" @submit.prevent="submit">
+    <div class="toolbar"><span class="spacer"></span><button type="button" class="button ghost" @click="$emit('importConfig')">从 Nginx 配置导入</button><button type="button" class="button ghost" @click="$emit('exportConfig', '', '全局设置')">复制配置</button></div>
     <article class="card settings-card">
       <div class="rule-editor-tabs settings-tabs" role="tablist" aria-label="全局设置">
         <button v-for="(tab, index) in tabs" :id="'settings-tab-' + index" :key="tab" type="button" role="tab"

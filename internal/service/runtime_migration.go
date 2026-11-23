@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/chenpingonline/nginx-web/internal/domain"
 	"github.com/chenpingonline/nginx-web/internal/fileutil"
+	"golang.org/x/mod/semver"
 )
 
 const runtimeConfigVersion = 2
@@ -49,13 +51,36 @@ func (s *AppService) migrationBaseline(draft State) (State, bool, error) {
 	return State{}, false, nil
 }
 
+// Trust only complete, stable package versions supplied by the upgrade callback.
+func legacyProxyExpiresVersion(previous string) bool {
+	v := "v" + strings.TrimPrefix(previous, "v")
+	return semver.IsValid(v) && semver.Canonical(v) == v && semver.Prerelease(v) == "" && semver.Compare(v, "v0.3.32") <= 0
+}
+
+func migrateProxyExpires(st *State) {
+	for i := range st.Rules {
+		rule := &st.Rules[i]
+		if rule.RootLocation.BackendType == "proxy" {
+			rule.RootLocation.Expires = ""
+		}
+		for j := range rule.Locations {
+			settings := &rule.Locations[j].Settings
+			if settings.BackendType == "proxy" {
+				settings.Expires = ""
+			}
+		}
+	}
+	st.LegacyProxyExpiresMigrated = true
+}
+
 // Used by both the installation callback and startup. Only the applied baseline
 // is regenerated; the user's saved draft is compared and retained separately.
-func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
+func (s *AppService) migrateRuntimeConfiguration(legacyExpires bool) (ApplyResult, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	draft := s.store.Snapshot()
-	if draft.RuntimeConfigVersion >= runtimeConfigVersion && !draft.PortMigrationPending {
+	legacyExpires = legacyExpires && !draft.LegacyProxyExpiresMigrated
+	if !legacyExpires && draft.RuntimeConfigVersion >= runtimeConfigVersion && !draft.PortMigrationPending {
 		// Repair representation-only dirty flags left by earlier migrations,
 		// including installations that already have the completion marker.
 		// This does not activate a draft or regenerate the running configuration.
@@ -86,6 +111,9 @@ func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 		return ApplyResult{}, false, nil
 	}
 	candidate := domain.CloneState(gatewayBaseline(base, draft))
+	if legacyExpires {
+		migrateProxyExpires(&candidate)
+	}
 	domain.PauseUnsupportedPorts(&candidate)
 	candidate.RuntimeMinListenPort = domain.MinListenPort
 	candidate.RuntimeConfigVersion = runtimeConfigVersion
@@ -129,6 +157,9 @@ func (s *AppService) migrateRuntimeConfiguration() (ApplyResult, bool, error) {
 		}
 	}
 	err = s.updateState(func(current *State) error {
+		if legacyExpires {
+			migrateProxyExpires(current)
+		}
 		current.RuntimeConfigVersion = runtimeConfigVersion
 		current.PortMigrationPending = false
 		current.LastAppliedAt = candidate.LastAppliedAt

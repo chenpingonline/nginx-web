@@ -156,6 +156,7 @@ func configurationContent(state State) State {
 	// Storage format versions are not user configuration changes.
 	state.LiveGatewayRoutes = nil
 	state.SchemaVersion = 0
+	state.LegacyProxyExpiresMigrated = false
 	state.RuntimeConfigVersion = 0
 	state.RuntimeMinListenPort = 0
 	state.PortMigrationPending = false

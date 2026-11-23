@@ -1,0 +1,265 @@
+import { parseConfig, newID } from "./nginxConfig";
+import type { ConfigForm } from "./configForm";
+import type { State, StreamRule, UpstreamPool, UpstreamServer } from "./types";
+
+type Node = ReturnType<typeof parseConfig>[number];
+function unsupported(node: Node): never {
+  throw Error(`第 ${node.line} 行无法完整还原：${node.words.join(" ")}`);
+}
+function endpoint(value: string, node: Node) {
+  const addr = /^(?:\[([\da-f:]+)\]|([\w.-]+)):(\d+)$/i.exec(value);
+  if (!addr) unsupported(node);
+  return { host: addr[1] || addr[2], port: Number(addr[3]) };
+}
+function seconds(value: string, node: Node) {
+  const match = /^(\d+)([smh]?)$/.exec(value);
+  if (!match) unsupported(node);
+  return (
+    Number(match[1]) * (match[2] === "m" ? 60 : match[2] === "h" ? 3600 : 1)
+  );
+}
+
+export function rawPool(node: Node): ConfigForm {
+  const target = /^fnproxy_(up|stream)_([a-f0-9]{12,64})$/.exec(node.words[1]);
+  if (!target || node.words.length !== 2 || !node.children) unsupported(node);
+  const pool: UpstreamPool = {
+    id: target[2],
+    name: node.words[1],
+    protocol: target[1] === "up" ? "http" : "stream",
+    strategy: "round_robin",
+    hash_key: "$request_uri",
+    keepalive: 0,
+    keepalive_requests: 1000,
+    keepalive_time_seconds: 3600,
+    keepalive_timeout_seconds: 60,
+    servers: [],
+    created_at: "0001-01-01T00:00:00Z",
+    updated_at: "0001-01-01T00:00:00Z",
+  };
+  for (const child of node.children) {
+    const [name, arg, ...rest] = child.words;
+    if (child.children) unsupported(child);
+    if (name === "server") {
+      const server: UpstreamServer = {
+        ...endpoint(arg, child),
+        weight: 1,
+        max_fails: 1,
+        fail_timeout_seconds: 10,
+        backup: false,
+        down: false,
+      };
+      for (const option of rest) {
+        if (option === "backup" || option === "down") server[option] = true;
+        else {
+          const [key, value] = option.split("=");
+          if ((key === "weight" || key === "max_fails") && /^\d+$/.test(value))
+            server[key] = Number(value);
+          else if (key === "fail_timeout")
+            server.fail_timeout_seconds = seconds(value, child);
+          else unsupported(child);
+        }
+      }
+      pool.servers.push(server);
+    } else if (["least_conn", "ip_hash"].includes(name) && !arg)
+      pool.strategy = name as "least_conn" | "ip_hash";
+    else if (child.words.join(" ") === "random two least_conn")
+      pool.strategy = "random";
+    else if (name === "hash" && rest.join(" ") === "consistent") {
+      pool.strategy = "hash";
+      pool.hash_key = arg;
+    } else if (
+      !rest.length &&
+      (name === "keepalive" || name === "keepalive_requests") &&
+      /^\d+$/.test(arg)
+    )
+      pool[name] = Number(arg);
+    else if (
+      !rest.length &&
+      (name === "keepalive_time" || name === "keepalive_timeout")
+    )
+      pool[`${name}_seconds`] = seconds(arg, child);
+    else unsupported(child);
+  }
+  return { kind: "upstreams", id: pool.id, value: pool };
+}
+
+export function rawStream(node: Node, state: State): ConfigForm {
+  const nodes = node.children ?? [];
+  const listen = nodes.find((d) => d.words[0] === "listen"),
+    pass = nodes.find((d) => d.words[0] === "proxy_pass");
+  if (!listen || !pass) unsupported(node);
+  const raw = listen.words[1],
+    address = /^\d+$/.test(raw)
+      ? { host: "*", port: Number(raw) }
+      : endpoint(raw, listen);
+  const options = listen.words.slice(2);
+  if (
+    options.some(
+      (o) => !["udp", "reuseport", "ssl", "proxy_protocol"].includes(o),
+    )
+  )
+    unsupported(listen);
+  const protocol = options.includes("udp") ? "udp" : "tcp";
+  const existing = state.stream_rules.find(
+    (r) =>
+      r.protocol === protocol &&
+      r.listen_port === address.port &&
+      r.listen_address === address.host,
+  );
+  const id =
+    existing?.id ||
+    nodes
+      .flatMap((d) => d.words)
+      .join(" ")
+      .match(
+        /fnproxy_stream_(?:conn|metrics|backend)_([a-f0-9]{12,64})\b/,
+      )?.[1] ||
+    newID();
+  const rule: StreamRule = {
+    id,
+    name: existing?.name || `${protocol.toUpperCase()} ${address.port}`,
+    enabled: true,
+    protocol,
+    listen_address: address.host,
+    listen_port: address.port,
+    upstream_pool_id: "",
+    upstream_host: "",
+    upstream_port: 0,
+    connect_timeout_seconds: 60,
+    proxy_timeout_seconds: 600,
+    udp_responses: 0,
+    accept_proxy_protocol: options.includes("proxy_protocol"),
+    proxy_protocol: false,
+    trusted_proxies: [],
+    tls_mode: options.includes("ssl") ? "terminate" : "off",
+    certificate_id: "",
+    sni_routes: [],
+    access_log: false,
+    allow: [],
+    deny: [],
+    max_connections: 0,
+    created_at: "0001-01-01T00:00:00Z",
+    updated_at: "0001-01-01T00:00:00Z",
+  };
+  let cert = "",
+    key = "";
+  for (const d of nodes) {
+    const [k, v, ...rest] = d.words;
+    if (d.children) unsupported(d);
+    if (d === listen) continue;
+    if (d === pass && !rest.length) {
+      const pool = /^fnproxy_stream_([a-f0-9]+)$/.exec(v);
+      if (pool) rule.upstream_pool_id = pool[1];
+      else {
+        const target = endpoint(v, d);
+        rule.upstream_host = target.host;
+        rule.upstream_port = target.port;
+      }
+    } else if (k === "access_log") rule.access_log ||= v !== "off";
+    else if (
+      k === "limit_conn" &&
+      v === "fnproxy_stream_conn_" + id &&
+      rest.length === 1
+    )
+      rule.max_connections = Number(rest[0]);
+    else if (rest.length) unsupported(d);
+    else if (k === "proxy_connect_timeout" || k === "proxy_timeout")
+      rule[
+        k === "proxy_timeout"
+          ? "proxy_timeout_seconds"
+          : "connect_timeout_seconds"
+      ] = seconds(v, d);
+    else if (k === "proxy_responses") rule.udp_responses = Number(v);
+    else if (k === "set_real_ip_from") rule.trusted_proxies.push(v);
+    else if (k === "allow" || k === "deny") rule[k].push(v);
+    else if (k === "proxy_protocol" && v === "on") rule.proxy_protocol = true;
+    else if (k === "ssl_preread" && v === "on") rule.tls_mode = "passthrough";
+    else if (k === "ssl_certificate") cert = v;
+    else if (k === "ssl_certificate_key") key = v;
+    else unsupported(d);
+  }
+  if (cert || key || rule.tls_mode === "terminate") {
+    const match = /\/([a-f0-9]+)\/fullchain\.pem$/.exec(cert);
+    if (!match || key !== cert.replace(/fullchain\.pem$/, "privkey.pem"))
+      unsupported(node);
+    rule.certificate_id = match[1];
+  }
+  return { kind: "streams", id, value: rule };
+}
+
+export function rawRouting(nodes: Node[], state: State): ConfigForm {
+  // Preserve unrelated worker/TLS settings and variables in the open form.
+  const settings = JSON.parse(
+    JSON.stringify(state.settings),
+  ) as State["settings"];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    const [kind, ...args] = node.words;
+    const variable = args.at(-1);
+    if (
+      !node.children ||
+      !variable ||
+      !/^\$\w+$/.test(variable) ||
+      seen.has(variable)
+    )
+      unsupported(node);
+    seen.add(variable);
+    const entries: { key: string; value: string }[] = [];
+    let fallback: string | undefined,
+      hostnames = false;
+    for (const child of node.children) {
+      const [key, value] = child.words;
+      if (child.children) unsupported(child);
+      if (
+        kind === "map" &&
+        key === "hostnames" &&
+        child.words.length === 1 &&
+        !hostnames
+      )
+        hostnames = true;
+      else if (child.words.length !== 2) unsupported(child);
+      else if (
+        key === "default" &&
+        kind !== "split_clients" &&
+        fallback === undefined
+      )
+        fallback = value;
+      else entries.push({ key, value });
+    }
+    if (kind === "map" && args.length === 2) {
+      const row = settings.routing.maps.find((r) => r.variable === variable);
+      const value = {
+        name: row?.name ?? variable.slice(1),
+        variable,
+        source: args[0],
+        hostnames,
+        default: fallback ?? "",
+        entries,
+      };
+      if (row) Object.assign(row, value);
+      else settings.routing.maps.push(value);
+    } else if (kind === "geo" && [1, 2].includes(args.length)) {
+      const row = settings.routing.geos.find((r) => r.variable === variable);
+      const value = {
+        name: row?.name ?? variable.slice(1),
+        variable,
+        source: args.length === 2 ? args[0] : "",
+        default: fallback ?? "",
+        entries,
+      };
+      if (row) Object.assign(row, value);
+      else settings.routing.geos.push(value);
+    } else if (kind === "split_clients" && args.length === 2) {
+      const row = settings.routing.splits.find((r) => r.variable === variable);
+      const value = {
+        name: row?.name ?? variable.slice(1),
+        variable,
+        source: args[0],
+        entries,
+      };
+      if (row) Object.assign(row, value);
+      else settings.routing.splits.push(value);
+    } else unsupported(node);
+  }
+  return { kind: "settings", id: "", value: settings };
+}

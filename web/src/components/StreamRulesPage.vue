@@ -30,13 +30,17 @@ const props = defineProps<{
   dirty: boolean;
 }>();
 const emit = defineEmits<{
+  importConfig: [];
+  exportConfig: [id: string, name: string];
+
   copy: [value: string, label: string];
-  save: [value: StreamRuleInput, id: string];
+  save: [value: StreamRuleInput, id: string, source?: SourceEntry];
   remove: [rule: StreamRule];
   toggle: [rule: StreamRule, enabled: boolean];
   refresh: [];
   preview:[rule:StreamRule];
   source:[entry:SourceEntry];
+  sourceRule:[entry:SourceEntry];
   sourceSaved: [];
 }>();
 const search = ref("");
@@ -103,7 +107,9 @@ const blank = (): StreamRuleInput => ({
 });
 const form = reactive<StreamRuleInput>(blank());
 const routeNames = ref<string[]>([]);
-function show(rule: StreamRule | null = null) {
+const editingSource = ref<SourceEntry>();
+function show(rule: StreamRule | null = null, source?: SourceEntry) {
+  editingSource.value = source;
   activeTab.value = "basic";
   editing.value = rule;
   Object.assign(form, blank(), rule ? structuredClone(toRaw(rule)) : {});
@@ -138,7 +144,7 @@ function submit() {
       .split(/[\s,]+/)
       .filter(Boolean),
   }));
-  emit("save", value, editing.value?.id ?? "");
+  emit("save", value, editing.value?.id ?? "", editingSource.value);
 }
 watch(
   () => props.rules,
@@ -154,6 +160,7 @@ watch(
       open.value = false;
   },
 );
+defineExpose({ show, close: () => { open.value = false; } });
 </script>
 <template>
   <div class="toolbar compact-rule-toolbar">
@@ -163,6 +170,7 @@ watch(
     <button class="button ghost" :disabled="busy" @click="emit('refresh')">
       <PhArrowClockwise :size="16" aria-hidden="true" />刷新
     </button>
+    <button class="button ghost" @click="$emit('importConfig')">从 Nginx 配置导入</button>
     <button class="button primary" @click="show()">
       <PhPlusCircle :size="17" aria-hidden="true" />添加 TCP/UDP 规则
     </button>
@@ -247,7 +255,7 @@ watch(
       <p>{{ rules.length ? "调整关键词、协议或启用状态后重试。" : "创建独立监听端口并转发到单节点服务或 Stream 转发服务组。" }}</p>
     </div>
   </article>
-  <ConfigSources @copy="(value, label) => emit('copy', value, label)" :entries="visibleSources" @saved="emit('sourceSaved')" @edit="emit('source',$event)" />
+  <ConfigSources stream-editor @rule="emit('sourceRule',$event)" @copy="(value, label) => emit('copy', value, label)" :entries="visibleSources" @saved="emit('sourceSaved')" @edit="emit('source',$event)" />
   <Teleport to="body">
     <div v-if="open" class="modal-backdrop" @mousedown.self="open = false">
       <section

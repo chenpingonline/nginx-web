@@ -8,7 +8,7 @@ import ProxyAddress from "./ProxyAddress.vue";
 import SourceParameterDialog from "./SourceParameterDialog.vue";
 
 const editing = ref<SourceEntry>();
-defineProps<{ entries: SourceEntry[]; ruleEditor?: boolean; busy?: boolean; pending?: SourceEntry }>();
+defineProps<{ entries: SourceEntry[]; ruleEditor?: boolean; streamEditor?: boolean; busy?: boolean; pending?: SourceEntry }>();
 defineEmits<{ disable: [entry: SourceEntry]; remove: [entry: SourceEntry]; preview: [entry: SourceEntry]; rule: [entry: SourceEntry]; edit: [entry: SourceEntry]; saved: []; copy: [value: string, label: string] }>();
 
 const collapsed = ref(false);
@@ -63,8 +63,8 @@ function toggle(entry: SourceEntry) {
                     <PhCaretRight v-else aria-hidden="true" />
                     {{ expanded.has(keyOf(item)) ? '收起详情' : '展开详情' }}
                   </button>
-                  <button v-if="ruleEditor && !item.error" type="button" class="button ghost small" @click="$emit('rule', item)">编辑</button>
-                  <button v-else-if="!item.error" type="button" class="button small" @click="editing = item">编辑参数</button>
+                  <button v-if="(ruleEditor || streamEditor) && !item.error" type="button" class="button ghost small" @click="$emit('rule', item)">编辑</button>
+                  <button v-if="!ruleEditor && !item.error" type="button" class="button small" @click="editing = item">编辑参数</button>
                   <button v-if="ruleEditor && !item.error" type="button" class="button danger-ghost small" :disabled="busy" @click="$emit('remove', item)">删除</button>
                 </div>
               </td>

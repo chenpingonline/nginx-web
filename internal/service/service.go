@@ -119,7 +119,11 @@ func New(paths Paths) (*AppService, error) {
 }
 
 func (s *AppService) Prepare() (ApplyResult, error) {
-	if result, handled, err := s.migrateRuntimeConfiguration(); handled || err != nil {
+	return s.PrepareUpgrade("")
+}
+
+func (s *AppService) PrepareUpgrade(previous string) (ApplyResult, error) {
+	if result, handled, err := s.migrateRuntimeConfiguration(legacyProxyExpiresVersion(previous)); handled || err != nil {
 		return result, err
 	}
 	state := s.State()

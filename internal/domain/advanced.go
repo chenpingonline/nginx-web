@@ -200,9 +200,11 @@ type DAVSettings struct {
 }
 
 type LocationSettings struct {
-	ConnectTimeoutSeconds int `json:"connect_timeout_seconds,omitempty"`
-	ReadTimeoutSeconds    int `json:"read_timeout_seconds,omitempty"`
-	SendTimeoutSeconds    int `json:"send_timeout_seconds,omitempty"`
+	ProxySSLServerName     *bool `json:"proxy_ssl_server_name,omitempty"`
+	ProxyPassTrailingSlash bool  `json:"proxy_pass_trailing_slash,omitempty"`
+	ConnectTimeoutSeconds  int   `json:"connect_timeout_seconds,omitempty"`
+	ReadTimeoutSeconds     int   `json:"read_timeout_seconds,omitempty"`
+	SendTimeoutSeconds     int   `json:"send_timeout_seconds,omitempty"`
 
 	BackendType          string             `json:"backend_type"`
 	UpstreamScheme       string             `json:"upstream_scheme"`
@@ -712,6 +714,9 @@ func ValidateHTTPLocations(rule ProxyRule, pools map[string]UpstreamPool) error 
 		}
 		if strings.ContainsAny(location.Path, "{};\r\n") {
 			return errors.New("Location 路径包含不允许的字符")
+		}
+		if location.Match == "regex" && location.Settings.BackendType == "proxy" && location.Settings.ProxyPassTrailingSlash {
+			return errors.New("正则路径的 proxy_pass 不能带结尾斜杠")
 		}
 		if location.Match == "exact" && strings.HasPrefix(location.Path, "/_nginx_web_internal_auth_") {
 			return errors.New("Location 路径使用了应用保留的内部认证地址")

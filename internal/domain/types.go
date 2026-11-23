@@ -92,6 +92,8 @@ type CertificateMeta struct {
 }
 
 type State struct {
+	LegacyProxyExpiresMigrated bool `json:"legacy_proxy_expires_migrated,omitempty"`
+
 	WAFInstances         []WAFInstance     `json:"waf_instances,omitempty"`
 	LiveGatewayRoutes    *[]GatewayRoute   `json:"live_gateway_routes,omitempty"` // Local activation since the last full apply; an empty array records the last deletion.
 	GatewayRoutes        []GatewayRoute    `json:"gateway_routes"`
@@ -232,7 +234,6 @@ func NormalizeRule(rule *ProxyRule, settings Settings) {
 			normalized = append(normalized, item)
 		}
 	}
-	sort.Strings(normalized)
 	rule.Domains = normalized
 
 	if rule.ListenPort == 0 {

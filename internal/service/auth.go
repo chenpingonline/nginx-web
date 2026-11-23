@@ -55,12 +55,18 @@ func (s *AppService) setAppliedAuthProfiles(profiles []domain.AuthProfile) {
 }
 
 func (s *AppService) CreateAuthProfile(input AuthProfileInput) (domain.AuthProfile, error) {
+	return s.CreateAuthProfileWithID(domain.RandomID(), input)
+}
+func (s *AppService) CreateAuthProfileWithID(id string, input AuthProfileInput) (domain.AuthProfile, error) {
+	if !domain.ValidID(id) {
+		return domain.AuthProfile{}, errors.New("认证策略 ID 无效")
+	}
 	profile, err := buildAuthProfile(domain.AuthProfile{}, input)
 	if err != nil {
 		return domain.AuthProfile{}, err
 	}
 	now := time.Now().UTC()
-	profile.ID = domain.RandomID()
+	profile.ID = id
 	profile.CreatedAt = now
 	profile.UpdatedAt = now
 	for index := range profile.Users {

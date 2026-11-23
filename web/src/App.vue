@@ -59,7 +59,7 @@ import ConfigDialog from "./components/ConfigDialog.vue";
 import SourceParameterDialog from "./components/SourceParameterDialog.vue";
 import ProxyAddress from "./components/ProxyAddress.vue";
 import ConfigSources from "./components/ConfigSources.vue";
-import { updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
+import { replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -85,6 +85,7 @@ import type {
   UpstreamPool,
   UpstreamPoolInput,
 } from "./types";
+import { matchSavedConfig, type ConfigForm } from "./configForm";
 import { formatDate, formatHost, shortFingerprint } from "./utils";
 
 type SidebarIconName =
@@ -302,9 +303,7 @@ async function saveRuleGroup(value: RuleGroup): Promise<{ group: RuleGroup; erro
   busy.value = true;
   let saved = false;
   try {
-    const group = await request<RuleGroup>(value.id ? `/rule-groups/${value.id}` : "/rule-groups", {
-      method: value.id ? "PUT" : "POST", body: jsonBody(value),
-    });
+    const group = await saveObject<RuleGroup>("/rule-groups", value.id, value);
     saved = true;
     try {
       await request("/apply", { method: "POST", body: jsonBody({ summary: `保存分组：${group.name}` }) });
@@ -339,12 +338,53 @@ const httpSources = computed(() => sources.value.filter(s=>s.file.name.endsWith(
 const filteredSources = computed(() => selectedGroup.value && selectedGroup.value !== "all" ? [] :
   httpSources.value.filter(s=>matchSource(s,ruleSearch.value,ruleProtocol.value,ruleEnabled.value)));
 const importing = ref(false);
+const streamEditor = ref<InstanceType<typeof StreamRulesPage>>();
+const upstreamEditor = ref<InstanceType<typeof UpstreamPoolsPage>>();
+const policyEditor = ref<InstanceType<typeof RateLimitPoliciesPage>>();
+const wafEditor = ref<InstanceType<typeof WAFPage>>();
+const authEditor = ref<InstanceType<typeof AuthProfilesPage>>();
+const settingsEditor = ref<InstanceType<typeof RuntimeSettingsForm>>();
+
+const importedCreate = ref<{path: string; id: string}>();
+async function saveObject<T>(path: string, id: string, value: object): Promise<T> {
+  if (id && importedCreate.value?.id === id && importedCreate.value.path === path) {
+    const kind = path === "/rate-limit-policies" ? "rate-limits" : path.slice(1);
+    const saved = await request<T>("/config-form/create", { method: "POST", body: jsonBody({kind, id, value: {...value, id}}) });
+    importedCreate.value = undefined;
+    return saved;
+  }
+  return request<T>(id ? path + "/" + id : path, {method: id ? "PUT" : "POST", body: jsonBody(value)});
+}
+async function openImportedForm(form: ConfigForm) {
+  if (!state.value || !menuEnabled(form.kind === "rule-groups" ? "rules" : form.kind)) throw new Error("请先启用对应菜单");
+  const collections = { rules: state.value.rules, streams: state.value.stream_rules, upstreams: state.value.upstream_pools,
+    "rate-limits": state.value.rate_limit_policies, "rule-groups": state.value.rule_groups ?? [] };
+  importedCreate.value = undefined;
+  if (form.kind in collections && !collections[form.kind as keyof typeof collections].some(row => row.id === form.id))
+    importedCreate.value = {path: form.kind === "rate-limits" ? "/rate-limit-policies" : "/" + form.kind, id: form.id};
+  importing.value = false;
+  setPage(form.kind === "rule-groups" ? "rules" : form.kind);
+  await nextTick();
+  switch (form.kind) {
+    case "rule-groups": groupPanel.value?.show(form.value); break;
+    case "rules": openRule(form.value); break;
+    case "streams": streamEditor.value?.show(form.value); break;
+    case "upstreams": upstreamEditor.value?.show(form.value); break;
+    case "rate-limits": policyEditor.value?.show(form.value); break;
+    case "waf": await wafEditor.value?.edit(form.value); break;
+    case "auth-profiles": authEditor.value?.show(form.value); break;
+    case "settings": settingsEditor.value?.restore(form.value); break;
+  }
+}
+async function previewForm(kind: ConfigForm["kind"], id: string, name: string) {
+  try {
+    const data = await request<{content: string}>(`/config-form?kind=${kind}&id=${encodeURIComponent(id)}`);
+    rulePreview.value = { ...data, name, draft: !!state.value?.dirty };
+  } catch (e) { toast(errorMessage(e), "error"); }
+}
 const rulePreview = ref<{content:string;name:string;draft:boolean}>();
 async function showConfig(id:string,name:string,stream=false) {
-  try {
-    const data=await request<{content:string}>(`/${stream ? "streams":"rules"}/${id}/config`);
-    rulePreview.value={...data,name,draft:!!state.value?.dirty};
-  } catch (e) {toast(errorMessage(e),"error");}
+  await previewForm(stream ? "streams" : "rules", id, name);
 }
 async function sourceSaved() {
   toast("自定义配置已保存为草稿，请校验后应用", "success");
@@ -667,7 +707,14 @@ async function discardDraft() {
   }
 }
 const sourceReplacement = ref<ReturnType<typeof sourceRuleCandidate>["source"]>();
+const annotatedHTTPSource = ref(false);
 async function inspectSource(entry: SourceEntry) {
+  const block = formSourceBlock(entry);
+  if (block.annotated) {
+    const form = await request<ConfigForm>("/config-form",{method:"POST",body:jsonBody({content:block.raw})});
+    if (form.kind!=="rules") throw Error("配置表单类型与 HTTP 站点不匹配");
+    return {source:block.source,rule:form.value,annotated:true};
+  }
   const { source, raw, rule, generated } = sourceRuleCandidate(entry, state.value!.rules);
   const parsed = await request<{rule: ProxyRule; content: string}>("/config-import/inspect", {
     method: "POST", body: jsonBody({source, rules: [rule]}),
@@ -675,11 +722,11 @@ async function inspectSource(entry: SourceEntry) {
   if (generated && ruleDirectives(parsed.content) !== ruleDirectives(raw)) {
     throw new Error("此配置含规则表单无法完整还原的指令");
   }
-  return { source, rule: parsed.rule };
+  return { source, rule: parsed.rule, annotated:false };
 }
 const pendingSource = ref<SourceEntry>();
 function previewSource(entry: SourceEntry) {
-  rulePreview.value = { name: entry.title, content: sourceBlock(entry).raw, draft: !!state.value?.dirty };
+  rulePreview.value = { name: entry.title, content: formSourceBlock(entry).raw, draft: !!state.value?.dirty };
 }
 async function changeSource(entry: SourceEntry, remove: boolean) {
   const verb = remove ? "删除" : "停用";
@@ -691,7 +738,7 @@ async function changeSource(entry: SourceEntry, remove: boolean) {
     let saved = false;
     await mutate(async () => {
       if (remove) {
-        await request("/config-import/source-block", { method: "DELETE", body: jsonBody(sourceBlock(entry).source) });
+        await request("/config-import/source-block", { method: "DELETE", body: jsonBody(formSourceBlock(entry).source) });
       } else {
         const { source, rule } = await inspectSource(entry);
         await saveSourceRule(source, { ...rule, enabled: false });
@@ -711,8 +758,9 @@ async function openSourceRule(entry: SourceEntry) {
   if (!state.value || busy.value) return;
   busy.value = true;
   try {
-    const {source, rule} = await inspectSource(entry);
+    const {source, rule, annotated} = await inspectSource(entry);
     openRule(rule);
+    annotatedHTTPSource.value = annotated;
     sourceReplacement.value = source;
   } catch (error) {
     toast(errorMessage(error) + "。已打开源文件。", "error");
@@ -721,6 +769,7 @@ async function openSourceRule(entry: SourceEntry) {
 }
 function openRule(rule: ProxyRule | null = null) {
   sourceReplacement.value = undefined;
+  annotatedHTTPSource.value = false;
   editingRule.value = rule;
   newRuleGroup.value = selectedGroup.value === "all" ? "" : selectedGroup.value;
   modal.value = "rule";
@@ -745,18 +794,21 @@ async function saveRule(value: ProxyRuleInput, applyAfter: boolean) {
   const saved = await mutate(async () => {
     if (sourceReplacement.value) {
       const source = sourceReplacement.value;
-      const [rendered] = await request<string[]>("/config-import/preview", {
-        method: "POST", body: jsonBody({ source, rules: [{ ...value, id }] }),
-      });
-      const { content, end } = updateSourceBlock(source, rendered);
+      let replacement;
+      if (annotatedHTTPSource.value) {
+        const preview = await request<{exported:string}>("/config-form/preview", {method:"POST",body:jsonBody({kind:"rules",id,value:{...value,id}})});
+        replacement = replaceSourceRange(source,preview.exported.trimEnd());
+      } else {
+        const [rendered] = await request<string[]>("/config-import/preview", {method:"POST",body:jsonBody({source,rules:[{...value,id}]})});
+        replacement = updateSourceBlock(source,rendered);
+      }
+      const {content,end} = replacement;
       const file = await request<CustomConfig>("/custom-configs/" + encodeURIComponent(source.name), {
         method: "PUT", body: jsonBody({ name: source.name, content, expected_content: source.expected }),
       });
       sourceReplacement.value = { ...source, expected: file.content, end };
     } else {
-      editingRule.value = await request<ProxyRule>(id ? `/rules/${id}` : "/rules", {
-        method: id ? "PUT" : "POST", body: jsonBody(value),
-      });
+      editingRule.value = await saveObject<ProxyRule>("/rules", id ?? "", value);
     }
     persisted = true;
     if (applyAfter) {
@@ -967,14 +1019,12 @@ async function clearCache() {
   if (!(await ask("清理代理缓存", "将删除 nginx-web 生成的全部 HTTP 缓存文件，正在处理的请求可能重新回源。"))) return;
   await mutate(() => request("/cache", { method: "DELETE" }), "代理缓存已清理");
 }
-async function saveAndApplyResource<T>(path: string, value: unknown, id: string, label: string, done: (saved?: T, error?: string) => void) {
+async function saveAndApplyResource<T>(path: string, value: object, id: string, label: string, done: (saved?: T, error?: string) => void) {
   if (busy.value) return;
   busy.value = true;
   let saved: T | undefined;
   try {
-    saved = await request<T>(id ? `${path}/${id}` : path, {
-      method: id ? "PUT" : "POST", body: jsonBody(value),
-    });
+    saved = await saveObject<T>(path, id, value);
     await request("/apply", { method: "POST", body: jsonBody({ summary: `保存并应用${label}` }) });
     done(saved);
     toast(`${label}已保存并应用`, "success");
@@ -1019,20 +1069,33 @@ async function removeRateLimitPolicy(policy: RateLimitPolicy) {
   );
   if (ok !== undefined) await loadCore(true);
 }
-async function saveStreamRule(value: StreamRuleInput, id: string) {
+async function editStreamSource(entry: SourceEntry) {
+  try {
+    const { raw,annotated } = formSourceBlock(entry);
+    const form = annotated
+      ? await request<ConfigForm>("/config-form", {method:"POST",body:jsonBody({content:raw})})
+      : await matchSavedConfig(raw,state.value!);
+    if (form?.kind !== "streams") throw Error("此配置无法完整还原为 TCP/UDP 规则");
+    streamEditor.value?.show(form.value,entry);
+  } catch(e) { toast(errorMessage(e) + "。已打开源文件。","error"); await editSource(entry); }
+}
+async function saveStreamRule(value: StreamRuleInput, id: string, entry?: SourceEntry) {
   let saved = false;
   await mutate(
     async () => {
-      await request(id ? `/streams/${id}` : "/streams", {
-        method: id ? "PUT" : "POST",
-        body: jsonBody(value),
-      });
+      if (entry) {
+        const preview = await request<{content:string;exported:string}>("/config-form/preview", {method:"POST", body:jsonBody({kind:"streams",id,value:{...value,id}})});
+        const {source,annotated} = formSourceBlock(entry);
+        const index = sourceEntries([entry.file]).findIndex(item=>item.start===entry.start);
+        const content = (annotated ? replaceSourceRange(source,preview.exported.trimEnd()) : updateSourceBlock(source,preview.content)).content;
+        const savedFile = await request<CustomConfig>("/custom-configs/" + encodeURIComponent(source.name), {method:"PUT",body:jsonBody({name:source.name,content,expected_content:source.expected})});
+        streamEditor.value?.show({...value,id} as StreamRule, sourceEntries([savedFile])[index]);
+      } else await saveObject("/streams", id, value);
       saved = true;
       try {
-        return await request<ApplyResult>("/apply", {
-          method: "POST",
-          body: jsonBody({ summary: "保存并应用 TCP/UDP 规则" }),
-        });
+        const result = await request<ApplyResult>("/apply", {method:"POST",body:jsonBody({summary:"保存并应用 TCP/UDP 规则"})});
+        streamEditor.value?.close();
+        return result;
       } catch (error) {
         throw new Error(`规则已保存，但应用失败：${errorMessage(error)}。请修正后重新保存，或到“Nginx 配置”页面重新应用。`);
       }
@@ -1204,7 +1267,7 @@ onBeforeUnmount(() => {
             @errors="openErrorDetails"
             @navigate="setPage"
           />
-          <WAFPage v-else-if="page === 'waf'" :state="state" :busy="busy" @refresh="loadCore(true)" @apply="applyConfiguration" />
+          <WAFPage ref="wafEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('waf',id,name)" v-else-if="page === 'waf'" :state="state" :busy="busy" @refresh="loadCore(true)" @apply="applyConfiguration" />
           <NetworkTopology v-else-if="page === 'topology'" />
           <ErrorDetailsPage v-else-if="page === 'errors'"
             :overview="overview" :busy="busy" :updated-at="state.updated_at"
@@ -1214,8 +1277,8 @@ onBeforeUnmount(() => {
           <BackupPage v-else-if="page === 'backup'" :state="state" :busy="busy" @download="downloadBackup" @restore="restoreBackup" @apply="applyConfiguration" />
           <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" @updated="updateGatewayRoute" :busy="busy" @refresh="loadCore(true)" />
           <template v-else-if="page === 'streams'">
-            <StreamRulesPage @copy="copyProxyAddress"
-              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @source-saved="sourceSaved" @preview="(r)=>showConfig(r.id,r.name,true)"
+            <StreamRulesPage ref="streamEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('streams',id,name)" @copy="copyProxyAddress"
+              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @source-rule="editStreamSource" @source-saved="sourceSaved" @preview="(r)=>showConfig(r.id,r.name,true)"
               :dirty="state.dirty"
               :pending-toggles="streamToggleTargets"
               :pools="state.upstream_pools"
@@ -1228,17 +1291,17 @@ onBeforeUnmount(() => {
             />
           </template>
           <template v-else-if="page === 'upstreams'"
-            ><UpstreamPoolsPage
+            ><UpstreamPoolsPage ref="upstreamEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('upstreams',id,name)"
               :pools="state.upstream_pools"
               :busy="busy"
               @save="saveUpstreamPool"
               @remove="removeUpstreamPool"
               @refresh="loadCore()"
           /></template>
-          <AuthProfilesPage v-else-if="page === 'auth-profiles'" :profiles="state.auth_profiles ?? []" :rules="state.rules" :busy="busy"
+          <AuthProfilesPage ref="authEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('auth-profiles',id,name)" v-else-if="page === 'auth-profiles'" :profiles="state.auth_profiles ?? []" :rules="state.rules" :busy="busy"
             @changed="updateAuthProfiles" @remove="removeAuthProfile" @refresh="loadCore()" />
           <template v-else-if="page === 'rate-limits'"
-            ><RateLimitPoliciesPage
+            ><RateLimitPoliciesPage ref="policyEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('rate-limits',id,name)"
               :policies="state.rate_limit_policies"
               :rules="state.rules"
               :busy="busy"
@@ -1295,7 +1358,7 @@ onBeforeUnmount(() => {
                   <button type="button" class="button ghost small group-toggle" :aria-expanded="!collapsedGroups.has(section.id)" :aria-controls="`group-rules-${section.id || 'ungrouped'}`" :aria-label="`${collapsedGroups.has(section.id) ? '展开' : '收起'}分组 ${section.name}`" @click="toggleGroupExpanded(section.id)"><PhCaretRight v-if="collapsedGroups.has(section.id)" :size="15" aria-hidden="true" /><PhCaretDown v-else :size="15" aria-hidden="true" />{{ collapsedGroups.has(section.id) ? '展开' : '收起' }}</button>
                   <h3>{{ section.name }}</h3><span class="proxy-group-count">{{ section.rules.length }} 条规则</span><p v-if="section.group" :title="groupDescription(section.group)">{{ groupDescription(section.group) }}</p>
                 </div>
-                <div class="table-actions"><button v-if="section.group" class="button secondary small" :disabled="busy" @click="groupPanel?.show(section.group)">编辑分组</button><button class="button primary small" :disabled="busy" @click="addRuleToGroup(section.id)"><PhPlusCircle :size="15" />添加规则</button></div>
+                <div class="table-actions"><button v-if="section.group" class="button ghost small" @click="previewForm('rule-groups', section.group.id, section.group.name)">复制分组配置</button><button v-if="section.group" class="button secondary small" :disabled="busy" @click="groupPanel?.show(section.group)">编辑分组</button><button class="button primary small" :disabled="busy" @click="addRuleToGroup(section.id)"><PhPlusCircle :size="15" />添加规则</button></div>
               </header>
               <div v-show="!collapsedGroups.has(section.id)" :id="`group-rules-${section.id || 'ungrouped'}`">
               <div v-if="section.rules.length" class="table-wrap">
@@ -1635,7 +1698,7 @@ onBeforeUnmount(() => {
             </article></template
           >
           <template v-else>
-            <RuntimeSettingsForm
+            <RuntimeSettingsForm ref="settingsEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('settings',id,name)"
               :menus="platformPages"
               :settings="state.settings"
               :busy="busy"
@@ -1654,7 +1717,7 @@ onBeforeUnmount(() => {
   </div>
   <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
   <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
-  <ConfigDialog v-if="importing || rulePreview" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
+  <ConfigDialog v-if="state && (importing || rulePreview)" :state="state" :open-form="openImportedForm" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
   <SourceParameterDialog v-if="parameterFile" :entry="{ file: parameterFile, title: parameterFile.name }" @close="parameterFile = undefined" @saved="parameterFile = undefined; sourceSaved()" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">

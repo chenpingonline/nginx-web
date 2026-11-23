@@ -13,6 +13,9 @@ const props = defineProps<{
   busy: boolean;
 }>();
 const emit = defineEmits<{
+  importConfig: [];
+  exportConfig: [id: string, name: string];
+
   save: [value: UpstreamPoolInput, id: string, done: (saved?: UpstreamPool, error?: string) => void];
   remove: [pool: UpstreamPool];
   refresh: [];
@@ -84,6 +87,7 @@ function savedResult(saved?: UpstreamPool, error?: string) {
   saveError.value = error ?? "";
   if (saved && !error) open.value = false;
 }
+defineExpose({ show });
 </script>
 <template>
   <div class="toolbar compact-rule-toolbar">
@@ -96,6 +100,7 @@ function savedResult(saved?: UpstreamPool, error?: string) {
     <button class="button ghost" :disabled="busy" @click="emit('refresh')">
       <PhArrowClockwise :size="16" aria-hidden="true" />刷新
     </button>
+    <button class="button ghost" @click="$emit('importConfig')">从 Nginx 配置导入</button>
     <button class="button primary" @click="show()">
       <PhPlusCircle :size="17" aria-hidden="true" />添加转发服务组
     </button>
@@ -126,6 +131,7 @@ function savedResult(saved?: UpstreamPool, error?: string) {
             <td>{{ pool.keepalive || "关闭" }}</td>
             <td>
               <div class="table-actions">
+                <button class="button ghost small" @click="$emit('exportConfig', pool.id, pool.name)">复制配置</button>
                 <button class="button ghost small" @click="show(pool)">
                   编辑</button
                 ><button
