@@ -27,7 +27,7 @@ export function parseSourceProxyTarget(raw: string, stream = false): SourceProxy
   if (quote && !raw.endsWith(quote)) return;
   const token = quote ? raw.slice(1, -1) : raw;
   const unescaped = token.replace(/\\./g, "");
-  if (quote ? unescaped.includes(quote) : /['"]/.test(unescaped)) return;
+  if (quote && unescaped.includes(quote)) return;
 
   const scheme = stream ? "" : /^https?(?=:\/\/)/i.exec(token)?.[0] ?? "";
   const address = scheme ? token.slice(scheme.length + 3) : token;
@@ -57,7 +57,7 @@ export function formatSourceProxyTarget(target: SourceProxyTarget): string {
     token += target.expression;
   }
   if (/[\0\r\n]/.test(token)) throw Error("转发地址只能占一行");
-  const quote = target.quote || (isSingleArgument(token) && !/['"]/.test(token.replace(/\\./g, "")) ? "" : '"');
+  const quote = target.quote || (isSingleArgument(token) && !/^['"]/.test(token) ? "" : '"');
   if (!quote) return token;
   // Escape newly typed delimiter quotes without changing existing escapes.
   const escaped = token.replace(/\\.|["']/g, part => part === quote ? "\\" + part : part);

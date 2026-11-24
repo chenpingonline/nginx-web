@@ -57,9 +57,6 @@ const sourceMode = computed(() => {
   return importMode(f, f.wrapped ? parseConfig(f.text) : blocks.value);
 });
 const singlePool = computed(() => blocks.value.length === 1 && externalPool(blocks.value[0]));
-const sharedScope = computed(() => !fragment.value.wrapped && blocks.value.length > 0 &&
-  blocks.value.every(b => ["include", "map", "geo", "split_clients", "upstream"].includes(b.words[0])) &&
-  (singlePool.value || sourceMode.value === "file" || blocks.value.some(b => ["map", "geo", "split_clients"].includes(b.words[0]))));
 const sites = computed(() => sourceMode.value === "server-fragment" ? sourceTargets(props.state.custom_configs ?? []) : []);
 const needsSite = computed(() => sourceMode.value === "server-fragment");
 const savedWafCandidate = computed(() => {
@@ -185,7 +182,7 @@ async function run(save: boolean) {
         maxlength="1048576"
         placeholder="粘贴复制的配置、server 或 location 块"
       ></textarea>
-      <div v-if="sharedScope" class="import-target">
+      <div v-if="!annotated && fragment.sharedScope" class="import-target">
         <label for="import-scope">{{ singlePool ? "服务组协议" : "配置作用域" }}</label>
         <AppSelect id="import-scope" v-model="scope" :disabled="working">
           <option value="http">HTTP</option><option value="stream">TCP/UDP</option>

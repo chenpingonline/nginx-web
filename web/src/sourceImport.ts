@@ -99,6 +99,8 @@ function inspect(nodes: Node[], context: Context, scope: Scope, knownGlobalConte
         : ["location", "location-if", "limit_except"].includes(context) && (variable || /^https?:\/\//i.test(value));
       if (!valid || children || words.length !== 2 || !value) return "invalid";
       advanced = variable || /^(?:https?:\/\/)?unix:/i.test(value);
+    } else if (scope === "stream" && name === "return" && words.length !== 2) {
+      return "invalid";
     } else if (name === "listen") {
       if (context !== "server" || !value || children || (scope === "http" && words.includes("udp"))) return "invalid";
       advanced = /^unix:/i.test(value);

@@ -1,7 +1,7 @@
 import { request, jsonBody } from "./api";
 import { findSavedForm, matchSavedConfig, type ConfigForm } from "./configForm";
 import { ConfigLineError, UnsupportedFormError, importBlocks, newID, parseConfig } from "./nginxConfig";
-import { rawFormEquivalent, rawPool } from "./rawConfigForm";
+import { managedPoolName, rawFormEquivalent, rawPool } from "./rawConfigForm";
 import { sourceImportMode, sourceImportPlan } from "./sourceImport";
 import type { State, UpstreamPool } from "./types";
 
@@ -16,21 +16,26 @@ export function configFragment(text: string, nodes: Block[], defaultScope: Scope
     const opening = /^(?:http|stream)\s*(?:#[^\n]*\n\s*)*\{/.exec(text.slice(first.start));
     if (opening) {
       const start = first.start + opening[0].length;
-      return { scope: first.words[0] as Scope, wrapped: true,
+      return { scope: first.words[0] as Scope, wrapped: true, sharedScope: false,
         text: text.slice(0, first.start) + text.slice(first.start + first.words[0].length, start - 1) +
           text.slice(start, first.end - 1) + text.slice(first.end) };
     }
   }
-  const hasStreamPass = nodes.some(n => n.words[0] === "server" && n.children?.some(d => d.words[0] === "proxy_pass"));
-  const httpOnly = new Set(["if", "location", "root", "try_files", "rewrite", "add_header"]);
-  const hasHttpSite = nodes.some(n => httpOnly.has(n.words[0]) ||
-    (n.words[0] === "server" && n.children?.some(d => httpOnly.has(d.words[0]))));
-  const scope = hasStreamPass ? "stream" : hasHttpSite ? "http" : defaultScope;
-  return { text, scope, wrapped: false };
+  if (nodes.length === 1 && first.words[0] === "upstream") {
+    const managed = managedPoolName.exec(first.words[1] ?? "");
+    if (managed) {
+      const scope: Scope = managed[1] === "up" ? "http" : "stream";
+      return { text, scope, wrapped: false, sharedScope: false };
+    }
+  }
+  const http = sourceImportMode(nodes, "http", true);
+  const stream = sourceImportMode(nodes, "stream", true);
+  const scope = http && !stream ? "http" : stream && !http ? "stream" : defaultScope;
+  return { text, scope, wrapped: false, sharedScope: http === "file" && stream === "file" };
 }
 
 export function externalPool(node: Block) {
-  return node.words[0] === "upstream" && !/^fnproxy_(?:up|stream)_[a-f0-9]+$/.test(node.words[1] ?? "");
+  return node.words[0] === "upstream" && !managedPoolName.test(node.words[1] ?? "");
 }
 
 function namedPool(text: string, node: Block, scope: Scope) {

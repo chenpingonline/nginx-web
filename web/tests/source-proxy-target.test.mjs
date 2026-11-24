@@ -9,6 +9,7 @@ const {editParameters, parameterGroups} = await vite.ssrLoadModule("/src/nginxCo
 
 test("round trips HTTP target expressions and explicit Unix URI delimiters", () => {
   for (const raw of [
+    "http://$pool/O'Reilly", 'http://unix:/run/mark"one.sock:/app', "http://$pool/path}end",
     "$origin", "${scheme}://${origin}:$port$request_uri", "http://$pool$request_uri", "https://[::1]:8443/$1?x=$arg_x",
     "'HTTP://${upstream}/path?next=$uri'", "http://unix:/var/run/site.sock", "http://unix:/var/run/site.sock:",
     '"https://unix:/run/site one.sock:/a/$1?x=$args"', "http://unix:/run/site.sock:$request_uri",

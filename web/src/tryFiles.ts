@@ -9,7 +9,7 @@ export function parseTryFiles(input: string): string[] {
     } else if (quote) {
       if (ch === quote) quote = "";
       else word += ch;
-    } else if (ch === '"' || ch === "'") {
+    } else if (!word && (ch === '"' || ch === "'")) {
       quote = ch;
     } else if (ch === "," || /\s/.test(ch)) {
       if (word) files.push(word);

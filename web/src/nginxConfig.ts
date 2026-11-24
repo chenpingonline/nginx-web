@@ -33,11 +33,12 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
   let words: string[] = [],
     word = "",
     quote = "",
-    active = false;
+    active = false,
+    afterQuote = false;
   let line = firstLine,
     start = 0,
-    startLine = firstLine,
-    variable = false;
+    startLine = firstLine;
+  let afterDollar = false;
   let argsStart = 0, argsEnd = 0;
   function finish(end: number) {
     if (active) {
@@ -49,11 +50,18 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
   }
   for (let i = 0; i < source.length; i++) {
     const c = source[i];
-    if (!quote && !variable && c === "#" && !active) {
+    const space = c === " " || c === "\t" || c === "\r" || c === "\n";
+    if (afterQuote) {
+      if (!space && c !== ";" && c !== "{" && c !== ")") fail(line, "引号后的参数缺少分隔符");
+      afterQuote = false;
+    }
+    const variableBrace = afterDollar && c === "{";
+    afterDollar = false;
+    if (!quote && c === "#" && !active) {
       while (i + 1 < source.length && source[i + 1] !== "\n") i++;
       continue;
     }
-    if (!quote && !variable && /\s/.test(c)) {
+    if (!quote && space) {
       finish(i);
       if (c === "\n") line++;
       continue;
@@ -62,8 +70,7 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
       start = i;
       startLine = line;
     }
-    if (!quote && !variable && c === "{" && word.endsWith("$")) variable = true;
-    else if (!quote && !variable && "{};".includes(c)) {
+    if (!quote && (c === ";" || (c === "{" && !variableBrace) || (c === "}" && !active))) {
       finish(i);
       if (c === "}") {
         if (words.length || stack.length === 1)
@@ -83,8 +90,9 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
         words = [];
       }
       continue;
-    } else if (variable && c === "}") variable = false;
-    if (!active && words.length === 1) argsStart = i;
+    }
+    const wordStart = !active;
+    if (wordStart && words.length === 1) argsStart = i;
     active = true;
     if (c === "\\") {
       if (++i === source.length) fail(line, "末尾转义不完整");
@@ -96,14 +104,18 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
       else if (escape === "\\" || escape === "'" || escape === '"') word += escape;
       else word += c + escape;
       if (source[i] === "\n") line++;
-    } else if (quote && c === quote) quote = "";
-    else if (!quote && (c === "'" || c === '"')) quote = c;
+    } else if (quote && c === quote) {
+      quote = "";
+      finish(i + 1);
+      afterQuote = true;
+    } else if (wordStart && (c === "'" || c === '"')) quote = c;
     else {
       word += c;
+      afterDollar = c === "$";
       if (c === "\n") line++;
     }
   }
-  if (quote || variable || active || words.length || stack.length !== 1)
+  if (quote || active || words.length || stack.length !== 1)
     fail(line, "配置块未闭合或缺少分号");
   return root;
 }
@@ -120,6 +132,8 @@ export interface SourceEntry {
   protocols: string[];
   error?: string;
 }
+const upstreamPassDirectives = new Set(["proxy_pass", "grpc_pass", "fastcgi_pass", "uwsgi_pass", "scgi_pass", "memcached_pass"]);
+
 export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
   return files.flatMap((file) => {
     const entries: SourceEntry[] = [];
@@ -135,17 +149,21 @@ export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
         const names = block.children
           .filter((node) => node.words[0] === "server_name")
           .flatMap((node) => node.words.slice(1));
-        const targets = new Set(values("proxy_pass"));
-        const routes: string[] = [];
-        function collectRoutes(nodes: Directive[]) {
+        const targets = new Set<string>();
+        const routes: {path: string; targets: Set<string>}[] = [];
+        function collectRoutes(nodes: Directive[], route?: Set<string>) {
           for (const node of nodes) {
-            if (node.words[0] !== "location") continue;
-            const passes = (node.children || [])
-              .filter((child) => child.words[0] === "proxy_pass")
-              .map((child) => child.words.slice(1).join(" "));
-            passes.forEach((target) => targets.add(target));
-            routes.push([node.words.join(" "), ...passes].join(" → "));
-            if (node.children) collectRoutes(node.children);
+            const name = node.words[0];
+            if (name === "location" && node.children) {
+              const locationTargets = new Set<string>();
+              routes.push({path: node.words.join(" "), targets: locationTargets});
+              collectRoutes(node.children, locationTargets);
+            } else if ((name === "if" || name === "limit_except") && node.children) {
+              collectRoutes(node.children, route);
+            } else if (!node.children && upstreamPassDirectives.has(name) && node.words.length === 2) {
+              targets.add(node.words[1]);
+              route?.add(node.words[1]);
+            }
           }
         }
         collectRoutes(block.children);
@@ -169,7 +187,7 @@ export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
           entrances: [...entrances],
           targets: [...targets],
           listeners: listens,
-          routes,
+          routes: routes.map(route => [route.path, ...route.targets].join(" → ")),
           protocols: (listens.length ? listens : [""]).map((v) =>
             stream
               ? /\budp\b/.test(v)
@@ -322,7 +340,7 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
   )
     unsupported(node);
   const settings: Partial<LocationSettings> = { backend_type: "proxy" };
-  const handlers = node.children.filter(d => ["proxy_pass","grpc_pass","fastcgi_pass","uwsgi_pass","scgi_pass","memcached_pass","stub_status","return"].includes(d.words[0]));
+  const handlers = node.children.filter(d => upstreamPassDirectives.has(d.words[0]) || ["stub_status", "return"].includes(d.words[0]));
   if (handlers.length > 1) unsupported(handlers[1]);
   const handler = handlers[0];
   const kind = handler?.words[0];

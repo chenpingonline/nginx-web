@@ -315,3 +315,32 @@ test("persist and restore the original upstream redirect mapping", () => {
   assert.throws(() => parse("Old_Pool", "", "proxy_redirect ~pattern replacement;"), /proxy_redirect/);
   assert.throws(() => parse("fnproxy_up_" + id, "", "proxy_redirect http://old/wrong/ /;"), /proxy_redirect/);
 });
+
+test("literal punctuation inside an unquoted filename keeps its original argument and offsets", async () => {
+  const {parameterGroups, editParameters} = await import("../src/nginxConfig.ts");
+  const raw = `server { location / { include /tmp/O'Reilly.inc; return 200 ends}here; } }`;
+  const fields = parameterGroups({file: {name: "custom-files.conf", content: raw}}).flatMap(g => g.fields);
+  assert.equal(fields.find(f => f.directive === "include").value, "/tmp/O'Reilly.inc");
+  assert.equal(fields.find(f => f.directive === "return").value, "200 ends}here");
+  assert.equal(editParameters(raw, fields), raw);
+  assert.deepEqual(parseConfig(`if ($arg_x = "a b") {return 204;}`)[0].words, ["if", "($arg_x", "=", "a b", ")"]);
+  assert.throws(() => parseConfig('include "one"two;'));
+  const {parseTryFiles} = await import("../src/tryFiles.ts");
+  assert.deepEqual(parseTryFiles("/O'Reilly.html =404"), ["/O'Reilly.html", "=404"]);
+});
+
+test("list the backends of conditional and nested locations under their own routes", () => {
+  const source = `server {
+    location /api {
+      if ($arg_beta) { proxy_pass http://beta; }
+      proxy_pass http://stable;
+      location /api/php { fastcgi_pass unix:/run/api.sock; }
+    }
+    location /write { limit_except GET { proxy_pass http://writer; } }
+    location /files { root /srv/www; }
+  }`;
+  const [site] = sourceEntries([{name: "custom-test.conf", content: source}]);
+  assert.deepEqual(site.targets, ["http://beta", "http://stable", "unix:/run/api.sock", "http://writer"]);
+  assert.deepEqual(site.routes, ["location /api → http://beta → http://stable", "location /api/php → unix:/run/api.sock",
+    "location /write → http://writer", "location /files"]);
+});

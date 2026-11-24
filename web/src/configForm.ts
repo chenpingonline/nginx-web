@@ -1,6 +1,6 @@
 import { UnsupportedFormError, parseConfig, ruleDirectives, importBlocks } from "./nginxConfig";
 import { routingDirectivesMatch } from "./routingComparison";
-import { rawFormEquivalent, rawPool, rawStream, rawRouting, rawRatePolicy, rawGroup } from "./rawConfigForm";
+import { managedPoolName, rawFormEquivalent, rawPool, rawStream, rawRouting, rawRatePolicy, rawGroup } from "./rawConfigForm";
 import { request } from "./api";
 import type {
   AuthProfile,
@@ -52,9 +52,7 @@ export async function findSavedForm(
         candidates.push({ kind: "streams", id: r.id });
     }
   } else if (nodes.length === 1 && nodes[0].words[0] === "upstream") {
-    const id = nodes[0].words[1]?.match(
-      /^fnproxy_(?:up|stream)_([0-9a-f]+)$/,
-    )?.[1];
+    const id = nodes[0].words[1]?.match(managedPoolName)?.[2];
     if (id && state.upstream_pools.some((p) => p.id === id))
       candidates.push({ kind: "upstreams", id });
   }

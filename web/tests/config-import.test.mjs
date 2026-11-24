@@ -128,3 +128,31 @@ test("preserves additional module directives when the pasted wrapper or site ide
     await assert.rejects(previewImport("http { include site.inc; " + misplaced + "; }", "", {}, "http"));
   }
 });
+
+test("infers the scope of included handlers and offers a choice for ambiguous sites", async () => {
+  const state = {custom_configs: [], stream_rules: []};
+  const udp = "server { listen 19071 udp; include transport.inc; }";
+  const ssl = "ssl_preread on; include transport.inc;";
+  for (const text of [udp, ssl]) {
+    const fragment = configFragment(text, parseConfig(text), "http");
+    assert.equal(fragment.scope, "stream");
+    assert.equal(fragment.sharedScope, false);
+    assert.equal((await previewImport(text, "", state, "http")).sourceForm.entry.file.name, "custom-import.stream");
+  }
+  const shared = "server { listen 19072; include handler.inc; }";
+  for (const scope of ["http", "stream"]) {
+    const fragment = configFragment(shared, parseConfig(shared), scope);
+    assert.equal(fragment.sharedScope, true);
+    assert.equal(fragment.scope, scope);
+    assert.equal((await previewImport(shared, "", state, scope)).sourceForm.entry.file.name,
+      scope === "http" ? "custom-import.conf" : "custom-import.stream");
+  }
+  for (const [prefix, scope, page] of [["up", "http", "stream"], ["stream", "stream", "http"]]) {
+    const pool = `upstream fnproxy_${prefix}_abcdef123456 { server 127.0.0.1:9800; }`;
+    const imported = configFragment(pool, parseConfig(pool), page);
+    assert.equal(imported.scope, scope);
+    assert.equal(imported.sharedScope, false);
+  }
+  const wrapped = "http { " + shared + " }";
+  assert.equal(configFragment(wrapped, parseConfig(wrapped), "stream").sharedScope, false);
+});

@@ -31,8 +31,10 @@ function listenAddress(listen: Node) {
   return match ? {host: "*", port: Number(match[1])} : endpoint(listen.words[1], listen);
 }
 
+export const managedPoolName = /^fnproxy_(up|stream)_([a-f0-9]{12,64})$/;
+
 export function rawPool(node: Node): Extract<ConfigForm, {kind: "upstreams"}> {
-  const target = /^fnproxy_(up|stream)_([a-f0-9]{12,64})$/.exec(node.words[1]);
+  const target = managedPoolName.exec(node.words[1]);
   if (node.words[0] !== "upstream" || !target || node.words.length !== 2 || !node.children) unsupported(node);
   const pool: UpstreamPool = {
     id: target[2],
