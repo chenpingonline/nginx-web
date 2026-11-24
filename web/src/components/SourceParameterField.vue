@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, useId, watch } from "vue";
+import SourceConditionField from "./SourceConditionField.vue";
+import { includePathField, splitCondition } from "../sourceCondition";
+import SourceProxyTarget from "./SourceProxyTarget.vue";
+import { parseSourceProxyTarget } from "../sourceProxyTarget";
 import AppSelect from "./AppSelect.vue";
 import type { Parameter } from "../nginxConfig";
 
@@ -7,6 +11,12 @@ const props = defineProps<{ field: Parameter; disabled: boolean; stream: boolean
 const value = defineModel<string>({ required: true });
 const id = useId();
 const { directive, original } = props.field;
+const advancedTarget = directive === "proxy_pass" && parseSourceProxyTarget(original, props.stream);
+const condition = directive === "if" && splitCondition(original);
+const include = directive === "include" && !props.field.readonly && includePathField(original);
+const includePath = ref(include ? include.path : "");
+watch(includePath, next => { if (include) value.value = include.format(next); });
+const label = directive === "include" ? "包含文件" : directive === "if" ? "条件表达式" : props.field.label;
 const listener = directive === "listen" && /^(\[::\]:)?(\d+)(\s+ssl)?$/.exec(original);
 const target = directive === "proxy_pass" && /^(https?):\/\/(\[[\da-fA-F:]+\]|[a-zA-Z0-9.-]+):(\d+)$/.exec(original);
 const switchable = ["http2", "proxy_buffering", "proxy_request_buffering"].includes(directive)
@@ -23,7 +33,8 @@ watch([port, tls, scheme, host], () => {
 </script>
 
 <template>
-  <div class="parameter">
+  <SourceProxyTarget v-if="advancedTarget" v-model="value" :target="advancedTarget" :disabled="disabled" />
+  <div v-else class="parameter">
     <template v-if="target">
       <label :for="id + '-scheme'">后端协议</label>
       <AppSelect :id="id + '-scheme'" v-model="scheme" :disabled="disabled">
@@ -42,9 +53,11 @@ watch([port, tls, scheme, host], () => {
         <input :id="id + '-tls'" v-model="tls" type="checkbox" :disabled="disabled">
       </template>
     </template>
+    <SourceConditionField v-else-if="condition" v-model="value" :condition="condition" :disabled="disabled" />
     <template v-else>
-      <label :for="id">{{ field.label }}</label>
-      <input v-if="switchable" :id="id" type="checkbox" :checked="value === 'on'" :disabled="disabled"
+      <label :for="id">{{ label }}</label>
+      <input v-if="include" :id="id" v-model="includePath" class="input wide" required spellcheck="false" :disabled="disabled">
+      <input v-else-if="switchable" :id="id" type="checkbox" :checked="value === 'on'" :disabled="disabled"
         @change="value = ($event.target as HTMLInputElement).checked ? 'on' : 'off'">
       <textarea v-else-if="/[\r\n]/.test(original)" :id="id" v-model="value" class="textarea wide" rows="3" required spellcheck="false" :disabled="disabled" />
       <input v-else :id="id" v-model="value" class="input wide" required spellcheck="false" :disabled="disabled">

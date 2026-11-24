@@ -1,10 +1,10 @@
-import { ConfigLineError, parseConfig, newID, importBlocks } from "./nginxConfig";
+import { ConfigLineError, UnsupportedFormError, parseConfig, newID, importBlocks } from "./nginxConfig";
 import type { ConfigForm } from "./configForm";
 import type { State, StreamRule, UpstreamPool, UpstreamServer } from "./types";
 
 type Node = ReturnType<typeof parseConfig>[number];
 function unsupported(node: Node): never {
-  throw new ConfigLineError(node.line, `无法完整还原：${node.words.join(" ")}`);
+  throw new UnsupportedFormError(node.line, `无法完整还原：${node.words.join(" ")}`);
 }
 function endpoint(value: string, node: Node, defaultPort?: number) {
   const addr = /^(?:\[([\da-f:.]+)\]|([\w.-]+))(?::(\d+))?$/i.exec(value);

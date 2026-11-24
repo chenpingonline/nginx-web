@@ -16,6 +16,9 @@ export class ConfigLineError extends Error {
     this.line = line;
   }
 }
+// Only representational limits may switch an import to source-backed fields.
+export class UnsupportedFormError extends ConfigLineError {}
+
 function fail(line: number, reason: string): never {
   throw new ConfigLineError(line, reason);
 }
@@ -229,7 +232,10 @@ export function parameterGroups(entry: { file: CustomConfig; start?: number }) {
     const fields: Parameter[] = [];
     if (block && block.words.length > 1) fields.push(field(block, false));
     for (const node of nodes) {
-      if (!node.children) fields.push(field(node, !!block && dataBlocks.has(block.words[0])));
+      if (!node.children) {
+        const dataRow = !!block && dataBlocks.has(block.words[0]) && node.words[0] !== "include";
+        fields.push(field(node, dataRow));
+      }
     }
     if (fields.length) groups.push({ title: path.join(" › ") || "文件指令", line: block?.line ?? 1, fields });
     for (const child of nodes) {
@@ -282,7 +288,7 @@ export function newID() {
   ).join("");
 }
 function unsupported(node: Directive): never {
-  return fail(node.line, `请保留为原文：${node.words.join(" ")}`);
+  throw new UnsupportedFormError(node.line, `请保留为原文：${node.words.join(" ")}`);
 }
 const timeoutKeys = new Map<
   string,
@@ -580,20 +586,20 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
     http2 ||= !!legacyHTTP2;
     const certID = cert.match(/\/([a-f0-9]{12,64})\/fullchain\.pem$/)?.[1];
     if (tls ? !certID || key !== cert.replace(/fullchain\.pem$/, "privkey.pem") : !!(cert || key || http2))
-      fail(block.line, "HTTPS 规则需要目标机已导入的证书和匹配的私钥路径");
-    if (catchAll && domains.join(" ") !== "_") fail(block.line,"默认站点域名无法完整还原");
+      throw new UnsupportedFormError(block.line, "HTTPS 规则需要目标机已导入的证书和匹配的私钥路径");
+    if (catchAll && domains.join(" ") !== "_") throw new UnsupportedFormError(block.line, "默认站点域名无法完整还原");
     const locations = paths.map(path => convertLocation(path, pools, staticRoot, indexFiles));
     if (staticRoot && !redirectPort && !locations.some(l => l.path === "/" && ["prefix", "priority_prefix"].includes(l.match))) {
       // A server-level root also serves requests unmatched by explicit locations.
       locations.unshift(convertLocation({...block, words: ["location", "/"], children: []}, pools, staticRoot, indexFiles));
     }
     if ((staticRoot || indexFiles) && !locations.some(l => l.settings.backend_type === "static"))
-      fail(block.line, "静态目录和首页需要对应的静态文件路径");
+      throw new UnsupportedFormError(block.line, "静态目录和首页需要对应的静态文件路径");
     const roots = locations.filter(
       (l) => l.path === "/" && l.match === "prefix",
     );
     if (!port || !domains.length || (redirectPort ? paths.length > 0 : roots.length !== 1))
-      fail(
+      throw new UnsupportedFormError(
         block.line,
         "结构化导入需要明确的 listen、server_name 和一个根代理路径",
       );
@@ -639,14 +645,24 @@ export function sourceBlock(entry: SourceEntry) {
 }
 
 // A versioned export comment belongs to the immediately following server only.
+export function formMetadataStart(content: string, start: number): number | undefined {
+  let end = content.lastIndexOf("\n", start - 1);
+  if (end < 0 || !/^[ \t]*$/.test(content.slice(end + 1, start))) return;
+  let headerStart: number | undefined;
+  while (end > 0) {
+    const line = content.lastIndexOf("\n", end - 1) + 1;
+    if (!/^# nginx-web-form-v1 [A-Za-z0-9+/]+\r?$/.test(content.slice(line, end))) break;
+    headerStart = line;
+    end = line - 1;
+  }
+  return headerStart;
+}
 export function formSourceBlock(entry: SourceEntry) {
   const block = sourceBlock(entry);
-  const prefix = entry.file.content.slice(0,entry.start);
-  const header = /(?:^|\n)((?:# nginx-web-form-v1 [A-Za-z0-9+/]+\r?\n)+)[ \t]*$/.exec(prefix)?.[1];
-  if (!header) return {...block, annotated:false};
-  const start = prefix.lastIndexOf(header);
-  return {...block, annotated:true, raw:entry.file.content.slice(start,entry.start) + block.raw,
-    source:{...block.source,start:new TextEncoder().encode(prefix.slice(0,start)).length}};
+  const start = formMetadataStart(entry.file.content, entry.start);
+  if (start === undefined) return {...block, annotated:false};
+  return {...block, annotated:true, raw:entry.file.content.slice(start, entry.start) + block.raw,
+    source:{...block.source, start:new TextEncoder().encode(entry.file.content.slice(0, start)).length}};
 }
 export function replaceSourceRange(source: ReturnType<typeof sourceBlock>["source"], block: string) {
   const encoder = new TextEncoder(), decoder = new TextDecoder("utf-8", {ignoreBOM:true});
@@ -669,7 +685,7 @@ export function updateSourceBlock(source: ReturnType<typeof sourceBlock>["source
 
 export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types").ProxyRule[]) {
   const { raw, source, nodes } = sourceBlock(entry);
-  if (raw.includes("#")) fail(entry.line + raw.slice(0, raw.indexOf("#")).split("\n").length - 1, "配置块含注释或特殊字符，请编辑源文件以保留原文");
+  if (raw.includes("#")) throw new UnsupportedFormError(entry.line + raw.slice(0, raw.indexOf("#")).split("\n").length - 1, "配置块含注释或特殊字符，请编辑源文件以保留原文");
   const args = (name: string) => nodes.find(n => n.words[0] === name)?.words.slice(1) ?? [];
   const originalID = nodes.find(n => n.words[0] === "set" && n.words[1] === "$fnproxy_rule_id")?.words[2];
   if (!originalID) {

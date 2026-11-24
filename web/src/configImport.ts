@@ -1,7 +1,8 @@
 import { request, jsonBody } from "./api";
-import { matchSavedConfig, type ConfigForm } from "./configForm";
-import { ConfigLineError, importBlocks, newID, parseConfig } from "./nginxConfig";
+import { findSavedForm, matchSavedConfig, type ConfigForm } from "./configForm";
+import { ConfigLineError, UnsupportedFormError, importBlocks, newID, parseConfig } from "./nginxConfig";
 import { rawFormEquivalent, rawPool } from "./rawConfigForm";
+import { sourceImportMode, sourceImportPlan } from "./sourceImport";
 import type { State, UpstreamPool } from "./types";
 
 type Scope = "http" | "stream";
@@ -21,7 +22,9 @@ export function configFragment(text: string, nodes: Block[], defaultScope: Scope
     }
   }
   const hasStreamPass = nodes.some(n => n.words[0] === "server" && n.children?.some(d => d.words[0] === "proxy_pass"));
-  const hasHttpSite = nodes.some(n => n.words[0] === "server" && n.children?.some(d => d.words[0] === "location"));
+  const httpOnly = new Set(["if", "location", "root", "try_files", "rewrite", "add_header"]);
+  const hasHttpSite = nodes.some(n => httpOnly.has(n.words[0]) ||
+    (n.words[0] === "server" && n.children?.some(d => httpOnly.has(d.words[0]))));
   const scope = hasStreamPass ? "stream" : hasHttpSite ? "http" : defaultScope;
   return { text, scope, wrapped: false };
 }
@@ -42,15 +45,45 @@ function namedPool(text: string, node: Block, scope: Scope) {
   return { form, original, line: node.line };
 }
 
-type Result = { form: ConfigForm } | { draft: ImportDraft; generated: string[] };
+export type SourceFormPlan = ReturnType<typeof sourceImportPlan>;
+type Result = { form: ConfigForm } | { draft: ImportDraft; generated: string[] } | { sourceForm: SourceFormPlan };
+
+// A standalone location may be representable by the managed path form or may
+// need to keep its surrounding source. Decide before asking for its target.
+export function importMode(fragment: ReturnType<typeof configFragment>, nodes: Block[]) {
+  let mode = sourceImportMode(nodes, fragment.scope, false, fragment.wrapped);
+  if (!mode && nodes.length === 1 && nodes[0].words[0] === "location" && !fragment.wrapped) {
+    try {
+      importBlocks(fragment.text, "preview");
+    } catch (error) {
+      if (error instanceof UnsupportedFormError) mode = sourceImportMode(nodes, fragment.scope, true);
+    }
+  }
+  return fragment.wrapped && mode === "server-fragment" ? undefined : mode;
+}
 
 export async function previewImport(text: string, target: string, state: State, defaultScope: Scope): Promise<Result> {
   const fragment = configFragment(text, parseConfig(text), defaultScope);
   const nodes = parseConfig(fragment.text);
+  if (importMode(fragment, nodes)) {
+    const saved = await findSavedForm(fragment.text, state, nodes);
+    if (saved) return { form: saved };
+    return { sourceForm: sourceImportPlan(fragment.text, nodes, fragment.scope, state.custom_configs ?? [], target, fragment.wrapped) };
+  }
+  try {
+    return await previewManaged(fragment, nodes, target, state);
+  } catch (error) {
+    const mode = sourceImportMode(nodes, fragment.scope, true, fragment.wrapped);
+    if (!(error instanceof UnsupportedFormError) || mode !== "file") throw error;
+    return { sourceForm: sourceImportPlan(fragment.text, nodes, fragment.scope, state.custom_configs ?? [], target, fragment.wrapped) };
+  }
+}
+
+async function previewManaged(fragment: ReturnType<typeof configFragment>, nodes: Block[], target: string, state: State): Promise<Result> {
   if (fragment.wrapped) {
     const allowed = fragment.scope === "http" ? ["server", "upstream", "map", "geo", "split_clients"] : ["server", "upstream"];
     const other = nodes.find(node => !allowed.includes(node.words[0]));
-    if (other) throw new ConfigLineError(other.line, "此作用域中的指令需按原文编辑");
+    if (other) throw new UnsupportedFormError(other.line, "此作用域中的指令需按原文编辑");
   }
   const declarations = nodes.filter(externalPool);
   let draft: ImportDraft;
@@ -62,12 +95,12 @@ export async function previewImport(text: string, target: string, state: State, 
         method: "POST", body: jsonBody(form),
       });
       if (!rawFormEquivalent("upstreams", original, preview.content))
-        throw new ConfigLineError(line, "服务组生成结果与原文不同");
+        throw new UnsupportedFormError(line, "服务组生成结果与原文不同");
       return { form: preview.form };
     }
     const sites = nodes.filter(n => n.words[0] === "server");
     if (fragment.scope !== "http" || !sites.length || sites.length + pools.length !== nodes.length)
-      throw Error("组合导入支持 HTTP upstream 和 server；其他指令可按原文编辑");
+      throw new UnsupportedFormError(declarations[0].line, "组合导入支持 HTTP upstream 和 server；其他指令可按原文编辑");
     const poolIds = new Map(pools.map(({form}) => [form.value.name.toLowerCase(), form.id]));
     if (poolIds.size !== pools.length) throw Error("转发服务组名称重复");
     const rules = sites.flatMap(node =>
@@ -76,7 +109,7 @@ export async function previewImport(text: string, target: string, state: State, 
     const generated = await previewDraft(draft);
     for (const [index, pool] of pools.entries()) {
       if (!rawFormEquivalent("upstreams", pool.original, generated[index]))
-        throw new ConfigLineError(pool.line, "服务组生成结果与原文不同");
+        throw new UnsupportedFormError(pool.line, "服务组生成结果与原文不同");
     }
     return {draft, generated};
   }
@@ -86,7 +119,7 @@ export async function previewImport(text: string, target: string, state: State, 
       throw Error("配置块与外层作用域不匹配");
     return {form};
   }
-  if (fragment.wrapped && fragment.scope === "stream") throw Error("此 stream 配置需按原文编辑");
+  if (fragment.wrapped && fragment.scope === "stream") throw new UnsupportedFormError(nodes[0]?.line ?? 1, "此 stream 配置需按原文编辑");
   draft = importBlocks(fragment.text, target);
   return {draft, generated: await previewDraft(draft)};
 }

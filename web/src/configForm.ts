@@ -1,4 +1,4 @@
-import { parseConfig, ruleDirectives, importBlocks } from "./nginxConfig";
+import { UnsupportedFormError, parseConfig, ruleDirectives, importBlocks } from "./nginxConfig";
 import { routingDirectivesMatch } from "./routingComparison";
 import { rawFormEquivalent, rawPool, rawStream, rawRouting, rawRatePolicy, rawGroup } from "./rawConfigForm";
 import { request } from "./api";
@@ -34,12 +34,9 @@ export function configBody(text: string) {
 
 // Old exports do not carry form metadata. Match their actual directives before
 // reusing fields (e.g. disabled locations) that exist only in the saved model.
-export async function matchSavedConfig(
-  text: string,
-  state: State,
-  firstLine = 1,
+export async function findSavedForm(
+  text: string, state: State, nodes: ReturnType<typeof parseConfig>,
 ): Promise<ConfigForm | undefined> {
-  const nodes = parseConfig(text, firstLine);
   const candidates: { kind: ConfigForm["kind"]; id: string }[] = [];
   if (nodes.length === 1 && nodes[0].words[0] === "server") {
     const body = nodes[0].children ?? [];
@@ -80,6 +77,7 @@ export async function matchSavedConfig(
       if (waf.sites.includes(site)) candidates.push({kind: "waf", id: waf.id});
   } else if (first?.[0] === "daemon") candidates.push({kind: "settings", id: ""});
 
+  if (!candidates.length) return;
   const signature = ruleDirectives(text);
   let matched: string | undefined;
   for (const c of candidates) {
@@ -98,12 +96,19 @@ export async function matchSavedConfig(
   if (matched) return request<ConfigForm>("/config-form", {
     method: "POST", body: JSON.stringify({ content: matched }),
   });
+}
+export async function matchSavedConfig(text: string, state: State, firstLine = 1): Promise<ConfigForm | undefined> {
+  const nodes = parseConfig(text, firstLine);
+  const saved = await findSavedForm(text, state, nodes);
+  if (saved) return saved;
+  const first = nodes[0]?.words;
+  const signature = ruleDirectives(text);
   if (first?.[0] === "limit_req_zone" || first?.[0] === "listen") {
     const candidate = first[0] === "listen" ? rawGroup(text, firstLine) : rawRatePolicy(nodes, state);
     const preview = await request<{ form: ConfigForm; content: string }>("/config-form/preview", {
       method: "POST", body: JSON.stringify(candidate),
     });
-    if (ruleDirectives(preview.content) !== signature) throw Error("表单生成的指令与原文不同");
+    if (ruleDirectives(preview.content) !== signature) throw new UnsupportedFormError(nodes[0].line, "表单生成的指令与原文不同");
     return preview.form;
   }
   if (
@@ -122,7 +127,7 @@ export async function matchSavedConfig(
         (d) => d.words[0] === n.words[0] && d.words.at(-1) === n.words.at(-1),
       );
       if (!matches.some(d => routingDirectivesMatch(n, d)))
-        throw Error("动态路由变量的生成结果与原文不同");
+        throw new UnsupportedFormError(n.line, "动态路由变量的生成结果与原文不同");
     }
     return preview.form;
   }
@@ -153,7 +158,7 @@ export async function matchSavedConfig(
     ? rawFormEquivalent(candidate.kind, text, preview.content)
     : ruleDirectives(preview.content) === signature;
   if (!equivalent)
-    throw Error(
+    throw new UnsupportedFormError(node.line,
       "这段配置包含无法完整还原的指令，请核对原文或复制包含表单注释的配置",
     );
   return preview.form;

@@ -57,11 +57,12 @@ import RuntimeSettingsForm from "./components/RuntimeSettingsForm.vue";
 import SidebarIcon from "./components/SidebarIcon.vue";
 import GatewayRoutesPage from "./components/GatewayRoutesPage.vue";
 import ConfigDialog from "./components/ConfigDialog.vue";
+import { sourceImportMode } from "./sourceImport";
 import SourceParameterDialog from "./components/SourceParameterDialog.vue";
 import ProxyAddress from "./components/ProxyAddress.vue";
 import ConfigSources from "./components/ConfigSources.vue";
 import ConfigTextEditor from "./components/ConfigTextEditor.vue";
-import { ConfigLineError, replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
+import { parseConfig, ConfigLineError, UnsupportedFormError, replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -547,7 +548,7 @@ const configText = computed(() =>
 );
 const configCopied = ref(false);
 let configCopiedTimer: number | undefined;
-const parameterFile = ref<CustomConfig>();
+const parameterEntry = ref<{file: CustomConfig; title: string; start?: number}>();
 const customConfigOpen = ref(false);
 const customConfigOriginal = ref("");
 const customConfigForm = reactive<CustomConfig>({ name: "custom-config.conf", content: "server {\n    listen 8080;\n    server_name example.com;\n    return 200;\n}\n" });
@@ -743,7 +744,7 @@ async function inspectSource(entry: SourceEntry) {
     method: "POST", body: jsonBody({source, rules: [rule]}),
   });
   if (generated && ruleDirectives(parsed.content) !== ruleDirectives(raw)) {
-    throw new Error("此配置含规则表单无法完整还原的指令");
+    throw new UnsupportedFormError(entry.line, "此配置含规则表单无法完整还原的指令");
   }
   return { source, rule: parsed.rule, annotated:false };
 }
@@ -781,12 +782,13 @@ async function openSourceRule(entry: SourceEntry) {
   if (!state.value || busy.value) return;
   busy.value = true;
   try {
+    if (openAdvancedParameters(entry)) return;
     const {source, rule, annotated} = await inspectSource(entry);
     openRule(rule);
     annotatedHTTPSource.value = annotated;
     sourceReplacement.value = source;
   } catch (error) {
-    await openSourceError(entry, error);
+    if (!(error instanceof UnsupportedFormError && openAdvancedParameters(entry, true))) await openSourceError(entry, error);
   } finally { busy.value = false; }
 }
 function openRule(rule: ProxyRule | null = null) {
@@ -1091,15 +1093,28 @@ async function removeRateLimitPolicy(policy: RateLimitPolicy) {
   );
   if (ok !== undefined) await loadCore(true);
 }
+function openAdvancedParameters(entry: SourceEntry, fallback = false) {
+  const { raw, annotated } = formSourceBlock(entry);
+  const scope = entry.file.name.endsWith(".stream") ? "stream" : "http";
+  if (annotated || !menuEnabled("config")) return false;
+  const nodes = parseConfig(raw);
+  if (!fallback && nodes[0].children?.some(n => n.words[0] === "set" && n.words[1] === "$fnproxy_rule_id")) return false;
+  if (!sourceImportMode(nodes, scope, fallback)) return false;
+  parameterEntry.value = entry;
+  return true;
+}
 async function editStreamSource(entry: SourceEntry) {
   try {
+    if (openAdvancedParameters(entry)) return;
     const { raw,annotated } = formSourceBlock(entry);
     const form = annotated
       ? await request<ConfigForm>("/config-form", {method:"POST",body:jsonBody({content:raw})})
       : await matchSavedConfig(raw,state.value!,entry.line);
     if (form?.kind !== "streams") throw Error("此配置无法完整还原为 TCP/UDP 规则");
     streamEditor.value?.show(form.value,entry);
-  } catch(e) { await openSourceError(entry, e); }
+  } catch(e) {
+    if (!(e instanceof UnsupportedFormError && openAdvancedParameters(entry, true))) await openSourceError(entry, e);
+  }
 }
 async function saveStreamRule(value: StreamRuleInput, id: string, entry?: SourceEntry) {
   let saved = false;
@@ -1689,7 +1704,7 @@ onBeforeUnmount(() => {
                 >
                   <PhCheckCircle :size="14" aria-hidden="true" />保存并应用
                 </button>
-                <button v-if="selectedCustomConfig" class="button secondary small" :disabled="busy" @click="parameterFile = selectedCustomConfig">编辑参数</button>
+                <button v-if="selectedCustomConfig" class="button secondary small" :disabled="busy" @click="parameterEntry = { file: selectedCustomConfig, title: selectedCustomConfig.name }">编辑参数</button>
                 <button v-if="selectedCustomConfig" class="button ghost small" :disabled="busy" @click="openCustomConfig(selectedCustomConfig)">编辑源文件</button>
                 <button v-if="selectedCustomConfig" class="button danger-ghost small" :disabled="busy" @click="deleteCustomConfig(selectedCustomConfig)">删除自定义配置</button>
                 <button class="button secondary small" :disabled="busy" @click="openCustomConfig()"><PhPlusCircle :size="14" />新建自定义配置</button>
@@ -1740,8 +1755,8 @@ onBeforeUnmount(() => {
   </div>
   <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
   <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
-  <ConfigDialog v-if="state && (importing || rulePreview)" :state="state" :open-form="openImportedForm" :stream-page="page === 'streams'" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
-  <SourceParameterDialog v-if="parameterFile" :entry="{ file: parameterFile, title: parameterFile.name }" @close="parameterFile = undefined" @saved="parameterFile = undefined; sourceSaved()" />
+  <ConfigDialog v-if="state && (importing || rulePreview)" :state="state" :open-form="openImportedForm" :custom-config-enabled="menuEnabled('config')" :stream-page="page === 'streams'" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
+  <SourceParameterDialog v-if="parameterEntry" :entry="parameterEntry" @close="parameterEntry = undefined" @saved="parameterEntry = undefined; sourceSaved()" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">
       <header class="modal-header">

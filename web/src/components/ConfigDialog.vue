@@ -4,7 +4,8 @@ import { configBody, formPrefix, type ConfigForm } from "../configForm";
 import { ConfigLineError, parseConfig } from "../nginxConfig";
 import { request, jsonBody, errorMessage } from "../api";
 import type { ProxyRule } from "../types";
-import { configFragment, externalPool, previewImport, type ImportDraft } from "../configImport";
+import { configFragment, externalPool, importMode, previewImport, type ImportDraft, type SourceFormPlan } from "../configImport";
+import { sourceTargets, targetKey } from "../sourceImport";
 import SourceParameterDialog from "./SourceParameterDialog.vue";
 import AppSelect from "./AppSelect.vue";
 
@@ -12,6 +13,7 @@ const props = defineProps<{
   state: import("../types").State;
   rules: ProxyRule[];
   streamPage: boolean;
+  customConfigEnabled: boolean;
   openForm: (value: ConfigForm) => Promise<void>;
   preview?: { content: string; name: string; draft: boolean };
 }>();
@@ -46,12 +48,30 @@ const fragment = computed(() => configFragment(source.value, blocks.value, scope
 function keepRaw(line?: number) {
   emit("raw", fragment.value.text, fragment.value.scope === "stream", line);
 }
+const sourceForm = ref<SourceFormPlan>();
 const editingParameters = ref(false);
+const annotated = computed(() => source.value.trimStart().startsWith(formPrefix));
+const sourceMode = computed(() => {
+  if (annotated.value) return;
+  const f = fragment.value;
+  return importMode(f, f.wrapped ? parseConfig(f.text) : blocks.value);
+});
+const singlePool = computed(() => blocks.value.length === 1 && externalPool(blocks.value[0]));
+const sharedScope = computed(() => !fragment.value.wrapped && blocks.value.length > 0 &&
+  blocks.value.every(b => ["include", "map", "geo", "split_clients", "upstream"].includes(b.words[0])) &&
+  (singlePool.value || sourceMode.value === "file" || blocks.value.some(b => ["map", "geo", "split_clients"].includes(b.words[0]))));
+const sites = computed(() => sourceMode.value === "server-fragment" ? sourceTargets(props.state.custom_configs ?? []) : []);
+const needsSite = computed(() => sourceMode.value === "server-fragment");
+const savedWafCandidate = computed(() => {
+  if (!needsSite.value) return false;
+  const exportedSite = source.value.match(/^# server ([a-f0-9]+)\s*$/m)?.[1];
+  return exportedSite && props.state.waf_instances?.some(waf => waf.sites.includes(exportedSite));
+});
 const isLocation = computed(() => blocks.value.length === 1 && blocks.value[0].words[0] === "location");
 function acceptParameters(value: string) {
   editingParameters.value = false;
   source.value = value;
-  if (!isLocation.value) keepRaw();
+  if (!isLocation.value && !needsSite.value) keepRaw();
 }
 const migrationHints: [RegExp, string, string][] = [
   [/^http:\/\/unix:.*\/waf\.sock:/, "WAF 检测服务", "在目标机配置同等防护，确认 WAF 服务已启动，并将套接字路径指向该服务。"],
@@ -105,6 +125,11 @@ async function run(save: boolean) {
     } else {
       const result = await previewImport(source.value, target.value, props.state, scope.value);
       if ("form" in result) { await props.openForm(result.form); return; }
+      if ("sourceForm" in result) {
+        if (!props.customConfigEnabled) throw Error("请先启用“Nginx 配置”菜单，以保存自定义配置草稿");
+        sourceForm.value = result.sourceForm;
+        return;
+      }
       candidate = result.draft;
       generated.value = result.generated;
     }
@@ -160,13 +185,23 @@ async function run(save: boolean) {
         maxlength="1048576"
         placeholder="粘贴复制的配置、server 或 location 块"
       ></textarea>
-      <div v-if="blocks.length === 1 && externalPool(blocks[0])" class="import-target">
-        <label for="import-scope">服务组协议</label>
-        <AppSelect id="import-scope" v-model="scope" aria-label="服务组协议" :disabled="working">
+      <div v-if="sharedScope" class="import-target">
+        <label for="import-scope">{{ singlePool ? "服务组协议" : "配置作用域" }}</label>
+        <AppSelect id="import-scope" v-model="scope" :disabled="working">
           <option value="http">HTTP</option><option value="stream">TCP/UDP</option>
         </AppSelect>
       </div>
-      <div v-if="isLocation" class="import-target">
+      <div v-if="needsSite" class="import-target">
+        <template v-if="sites.length">
+          <label for="import-site">目标站点</label>
+          <AppSelect id="import-site" v-model="target" aria-label="目标站点" :disabled="working">
+            <option value="">请选择</option>
+            <option v-for="site in sites" :key="targetKey(site)" :value="targetKey(site)">{{ site.title }} · {{ site.file.name }} · 第 {{ site.line }} 行</option>
+          </AppSelect>
+        </template>
+        <p v-else-if="!savedWafCandidate">请粘贴包含这段配置的完整 server 块，或先创建可追加的自定义 HTTP 站点。</p>
+      </div>
+      <div v-else-if="isLocation && !annotated && !sourceMode" class="import-target">
         <label for="import-target">目标代理</label
         ><AppSelect
           id="import-target"
@@ -181,7 +216,7 @@ async function run(save: boolean) {
       </div>
       <p v-if="error" role="alert">
         {{ error
-        }}<template v-if="isLocation"
+        }}<template v-if="isLocation && !needsSite"
           >。按原文保存时请粘贴包含该路径的完整 server 块。</template
         >
       </p>
@@ -195,10 +230,10 @@ async function run(save: boolean) {
       <button class="button ghost" :disabled="working" @click="emit('close')">
         关闭
       </button>
-      <button v-if="error && blocks.length && !source.trimStart().startsWith(formPrefix)" class="button secondary"
+      <button v-if="error && !sourceMode && blocks.length && !source.trimStart().startsWith(formPrefix)" class="button secondary"
         @click="editingParameters = true">按原文编辑参数</button>
       <button
-        v-if="!isLocation"
+        v-if="!isLocation && !needsSite"
         class="button secondary"
         :disabled="working || !source.trim()"
         @click="keepRaw(errorLine)"
@@ -207,7 +242,7 @@ async function run(save: boolean) {
       </button>
       <button
         class="button primary"
-        :disabled="working || !source.trim()"
+        :disabled="working || !source.trim() || (needsSite && !savedWafCandidate && !sites.some(s => targetKey(s) === target))"
         @click="run(generated.length > 0)"
       >
         {{
@@ -215,11 +250,13 @@ async function run(save: boolean) {
             ? "处理中…"
             : generated.length
               ? "确认保存为草稿"
-              : source.trimStart().startsWith(formPrefix) ? "打开对应表单" : "预览导入"
+              : source.trimStart().startsWith(formPrefix) ? "打开对应表单" : sourceMode ? "打开参数表单" : "预览导入"
         }}
       </button>
     </footer>
   </dialog>
+  <SourceParameterDialog v-if="sourceForm" :entry="sourceForm.entry" :create="!sourceForm.baseFile" :base-file="sourceForm.baseFile"
+    @close="sourceForm = undefined" @saved="emit('saved')" />
   <SourceParameterDialog v-if="editingParameters" local
     :entry="{file: {name: fragment.scope === 'stream' ? 'custom-import.stream' : 'custom-import.conf', content: source}, title: '导入配置'}"
     @close="editingParameters = false" @edited="acceptParameters" />
