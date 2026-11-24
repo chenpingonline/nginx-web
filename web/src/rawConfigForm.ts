@@ -6,22 +6,34 @@ type Node = ReturnType<typeof parseConfig>[number];
 function unsupported(node: Node): never {
   throw new ConfigLineError(node.line, `无法完整还原：${node.words.join(" ")}`);
 }
-function endpoint(value: string, node: Node) {
-  const addr = /^(?:\[([\da-f:]+)\]|([\w.-]+)):(\d+)$/i.exec(value);
-  if (!addr) unsupported(node);
-  return { host: addr[1] || addr[2], port: Number(addr[3]) };
-}
-function seconds(value: string, node: Node) {
-  const match = /^(\d+)([smh]?)$/.exec(value);
-  if (!match) unsupported(node);
-  return (
-    Number(match[1]) * (match[2] === "m" ? 60 : match[2] === "h" ? 3600 : 1)
-  );
+function endpoint(value: string, node: Node, defaultPort?: number) {
+  const addr = /^(?:\[([\da-f:.]+)\]|([\w.-]+))(?::(\d+))?$/i.exec(value);
+  if (!value || !addr || (!addr[3] && defaultPort === undefined)) unsupported(node);
+  return { host: addr[1] || addr[2], port: Number(addr[3] ?? defaultPort) };
 }
 
-export function rawPool(node: Node): ConfigForm {
+function seconds(value: string, node: Node, allowMilliseconds = false) {
+  const match = /^(\d+)(ms|[smhdw]?)$/.exec(value);
+  if (!match) unsupported(node);
+  const amount = Number(match[1]);
+  if (match[2] === "ms") {
+    if (!allowMilliseconds || amount % 1000 !== 0) unsupported(node);
+    return amount / 1000;
+  }
+  const units: Record<string, number> = { "": 1, s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+  const result = amount * units[match[2]];
+  if (!Number.isSafeInteger(result)) unsupported(node);
+  return result;
+}
+
+function listenAddress(listen: Node) {
+  const match = /^(?:\*:|0\.0\.0\.0:)?(\d+)$/.exec(listen.words[1]);
+  return match ? {host: "*", port: Number(match[1])} : endpoint(listen.words[1], listen);
+}
+
+export function rawPool(node: Node): Extract<ConfigForm, {kind: "upstreams"}> {
   const target = /^fnproxy_(up|stream)_([a-f0-9]{12,64})$/.exec(node.words[1]);
-  if (!target || node.words.length !== 2 || !node.children) unsupported(node);
+  if (node.words[0] !== "upstream" || !target || node.words.length !== 2 || !node.children) unsupported(node);
   const pool: UpstreamPool = {
     id: target[2],
     name: node.words[1],
@@ -36,49 +48,67 @@ export function rawPool(node: Node): ConfigForm {
     created_at: "0001-01-01T00:00:00Z",
     updated_at: "0001-01-01T00:00:00Z",
   };
+  const seen = new Set<string>();
   for (const child of node.children) {
     const [name, arg, ...rest] = child.words;
     if (child.children) unsupported(child);
+    const strategy = ["least_conn", "ip_hash", "hash", "random"].includes(name);
+    const key = strategy ? "strategy" : name;
+    if (name !== "server" && seen.has(key)) unsupported(child);
+    if (pool.protocol === "stream" && (name.startsWith("keepalive") || name === "ip_hash")) unsupported(child);
+    seen.add(key);
     if (name === "server") {
       const server: UpstreamServer = {
-        ...endpoint(arg, child),
+        ...endpoint(arg, child, pool.protocol === "http" ? 80 : undefined),
         weight: 1,
         max_fails: 1,
         fail_timeout_seconds: 10,
         backup: false,
         down: false,
       };
+      const options = new Set<string>();
       for (const option of rest) {
+        const [key, value, extra] = option.split("=");
+        if (options.has(key) || extra !== undefined) unsupported(child);
+        options.add(key);
         if (option === "backup" || option === "down") server[option] = true;
         else {
-          const [key, value] = option.split("=");
-          if ((key === "weight" || key === "max_fails") && /^\d+$/.test(value))
+          if ((key === "weight" || key === "max_fails") && /^[1-9]\d*$/.test(value))
             server[key] = Number(value);
           else if (key === "fail_timeout")
             server.fail_timeout_seconds = seconds(value, child);
           else unsupported(child);
         }
       }
+      if (server.fail_timeout_seconds === 0) unsupported(child);
       pool.servers.push(server);
-    } else if (["least_conn", "ip_hash"].includes(name) && !arg)
+    } else if (["least_conn", "ip_hash"].includes(name) && child.words.length === 1)
       pool.strategy = name as "least_conn" | "ip_hash";
-    else if (child.words.join(" ") === "random two least_conn")
+    else if (name === "random" && arg === "two" && (rest.length === 0 || (rest.length === 1 && rest[0] === "least_conn")))
       pool.strategy = "random";
-    else if (name === "hash" && rest.join(" ") === "consistent") {
+    else if (name === "hash" && rest.length === 1 && rest[0] === "consistent") {
       pool.strategy = "hash";
       pool.hash_key = arg;
+    } else if (name === "keepalive" && arg === "32" && rest.length === 1 && rest[0] === "local") {
+      // Nginx 1.30 uses a per-location cache of 32 when keepalive is omitted.
+      pool.keepalive = 0;
     } else if (
       !rest.length &&
       (name === "keepalive" || name === "keepalive_requests") &&
-      /^\d+$/.test(arg)
+      /^[1-9]\d*$/.test(arg)
     )
       pool[name] = Number(arg);
     else if (
       !rest.length &&
       (name === "keepalive_time" || name === "keepalive_timeout")
     )
-      pool[`${name}_seconds`] = seconds(arg, child);
+      pool[`${name}_seconds`] = seconds(arg, child, true);
     else unsupported(child);
+  }
+  if (pool.keepalive === 0 && (pool.keepalive_requests !== 1000 ||
+      pool.keepalive_time_seconds !== 3600 || pool.keepalive_timeout_seconds !== 60)) {
+    // The renderer emits keepalive tuning only with an explicit shared cache.
+    unsupported(node);
   }
   return { kind: "upstreams", id: pool.id, value: pool };
 }
@@ -88,10 +118,7 @@ export function rawStream(node: Node, state: State): ConfigForm {
   const listen = nodes.find((d) => d.words[0] === "listen"),
     pass = nodes.find((d) => d.words[0] === "proxy_pass");
   if (!listen || !pass) unsupported(node);
-  const raw = listen.words[1],
-    address = /^\d+$/.test(raw)
-      ? { host: "*", port: Number(raw) }
-      : endpoint(raw, listen);
+  const address = listenAddress(listen);
   const options = listen.words.slice(2);
   if (
     options.some(
@@ -104,7 +131,7 @@ export function rawStream(node: Node, state: State): ConfigForm {
     (r) =>
       r.protocol === protocol &&
       r.listen_port === address.port &&
-      r.listen_address === address.host,
+      (r.listen_address === "0.0.0.0" ? "*" : r.listen_address) === address.host,
   );
   const id =
     existing?.id ||
@@ -120,7 +147,7 @@ export function rawStream(node: Node, state: State): ConfigForm {
     name: existing?.name || `${protocol.toUpperCase()} ${address.port}`,
     enabled: true,
     protocol,
-    listen_address: address.host,
+    listen_address: existing?.listen_address ?? address.host,
     listen_port: address.port,
     upstream_pool_id: "",
     upstream_host: "",
@@ -168,7 +195,7 @@ export function rawStream(node: Node, state: State): ConfigForm {
         k === "proxy_timeout"
           ? "proxy_timeout_seconds"
           : "connect_timeout_seconds"
-      ] = seconds(v, d);
+      ] = seconds(v, d, true);
     else if (k === "proxy_responses") rule.udp_responses = Number(v);
     else if (k === "set_real_ip_from") rule.trusted_proxies.push(v);
     else if (k === "allow" || k === "deny") rule[k].push(v);
@@ -187,23 +214,73 @@ export function rawStream(node: Node, state: State): ConfigForm {
   return { kind: "streams", id, value: rule };
 }
 
+// Compare a raw fragment to the server-rendered preview. Pool defaults are
+// local to the upstream. Stream directives may inherit from stream {}, so a
+// missing directive must stay different from an explicit value.
+export function rawFormEquivalent(kind: "upstreams" | "streams", source: string, generated: string): boolean {
+  function signature(content: string) {
+    const nodes = parseConfig(content);
+    if (nodes.length !== 1) return;
+    const node = nodes[0];
+    if (kind === "upstreams") return JSON.stringify(rawPool(node).value);
+    if (node.words.length !== 1 || node.words[0] !== "server" || !node.children) return;
+    const groups = new Map<string, string[][]>();
+    for (const child of node.children) {
+      if (child.children) return;
+      const [name, value, ...rest] = child.words;
+      let words = child.words;
+      if (name === "listen") {
+        const address = listenAddress(child);
+        words = [name, address.host, String(address.port), ...rest.sort()];
+      } else if (name === "proxy_timeout" || name === "proxy_connect_timeout") {
+        if (rest.length) return;
+        words = [name, String(seconds(value, child, true))];
+      } else if (!streamDirectives.has(name)) return;
+      // Access checks run in input order, regardless of whether they allow or deny.
+      const key = name === "allow" || name === "deny" ? "acl" : name;
+      const rows = groups.get(key) ?? [];
+      rows.push(words);
+      groups.set(key, rows);
+    }
+    return JSON.stringify([...groups].sort(([a], [b]) => a.localeCompare(b)));
+  }
+  try {
+    const original = signature(source);
+    return original !== undefined && original === signature(generated);
+  } catch (error) {
+    if (error instanceof ConfigLineError) return false;
+    throw error;
+  }
+}
+
+const streamDirectives = new Set([
+  "proxy_pass", "proxy_responses", "proxy_protocol", "ssl_preread", "ssl_certificate",
+  "ssl_certificate_key", "set_real_ip_from", "allow", "deny", "limit_conn", "access_log",
+]);
+
 export function rawRouting(nodes: Node[], state: State): ConfigForm {
   // Preserve unrelated worker/TLS settings and variables in the open form.
   const settings = JSON.parse(
     JSON.stringify(state.settings),
   ) as State["settings"];
+  const owners = new Map<string, string>();
+  for (const [kind, definitions] of [
+    ["map", settings.routing.maps], ["geo", settings.routing.geos], ["split_clients", settings.routing.splits],
+  ] as const) {
+    for (const row of definitions) {
+      const key = row.variable.toLowerCase();
+      owners.set(key, owners.has(key) ? "conflict" : kind);
+    }
+  }
   const seen = new Set<string>();
   for (const node of nodes) {
     const [kind, ...args] = node.words;
     const variable = args.at(-1);
-    if (
-      !node.children ||
-      !variable ||
-      !/^\$\w+$/.test(variable) ||
-      seen.has(variable)
-    )
-      unsupported(node);
-    seen.add(variable);
+    if (!node.children || !variable || !/^\$\w+$/.test(variable)) unsupported(node);
+    const key = variable.toLowerCase();
+    if (seen.has(key) || (owners.has(key) && owners.get(key) !== kind))
+      throw new ConfigLineError(node.line, `动态路由变量 ${variable} 与其他定义重名`);
+    seen.add(key);
     const entries: { key: string; value: string }[] = [];
     let fallback: string | undefined,
       hostnames = false;
@@ -227,7 +304,7 @@ export function rawRouting(nodes: Node[], state: State): ConfigForm {
       else entries.push({ key, value });
     }
     if (kind === "map" && args.length === 2) {
-      const row = settings.routing.maps.find((r) => r.variable === variable);
+      const row = settings.routing.maps.find((r) => r.variable.toLowerCase() === key);
       const value = {
         name: row?.name ?? variable.slice(1),
         variable,
@@ -239,7 +316,7 @@ export function rawRouting(nodes: Node[], state: State): ConfigForm {
       if (row) Object.assign(row, value);
       else settings.routing.maps.push(value);
     } else if (kind === "geo" && [1, 2].includes(args.length)) {
-      const row = settings.routing.geos.find((r) => r.variable === variable);
+      const row = settings.routing.geos.find((r) => r.variable.toLowerCase() === key);
       const value = {
         name: row?.name ?? variable.slice(1),
         variable,
@@ -250,7 +327,7 @@ export function rawRouting(nodes: Node[], state: State): ConfigForm {
       if (row) Object.assign(row, value);
       else settings.routing.geos.push(value);
     } else if (kind === "split_clients" && args.length === 2) {
-      const row = settings.routing.splits.find((r) => r.variable === variable);
+      const row = settings.routing.splits.find((r) => r.variable.toLowerCase() === key);
       const value = {
         name: row?.name ?? variable.slice(1),
         variable,

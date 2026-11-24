@@ -1,4 +1,6 @@
 import { parseConfig, ruleDirectives, importBlocks } from "./nginxConfig";
+import { routingDirectivesMatch } from "./routingComparison";
+import { rawFormEquivalent, rawPool, rawStream, rawRouting, rawRatePolicy, rawGroup } from "./rawConfigForm";
 import { request } from "./api";
 import type {
   AuthProfile,
@@ -89,14 +91,13 @@ export async function matchSavedConfig(
     const same = c.kind === "settings" || c.kind === "waf"
       ? body.trim().replaceAll("\r\n", "\n") === text.trim().replaceAll("\r\n", "\n")
       : ruleDirectives(body) === signature;
-    if (!same) continue;
+    if (!same && !((c.kind === "streams" || c.kind === "upstreams") && rawFormEquivalent(c.kind, text, body))) continue;
     if (matched) throw Error("多条已保存的配置与原文一致，请复制含表单注释的配置以选择对应记录");
     matched = content;
   }
   if (matched) return request<ConfigForm>("/config-form", {
     method: "POST", body: JSON.stringify({ content: matched }),
   });
-  const { rawPool, rawStream, rawRouting, rawRatePolicy, rawGroup } = await import("./rawConfigForm");
   if (first?.[0] === "limit_req_zone" || first?.[0] === "listen") {
     const candidate = first[0] === "listen" ? rawGroup(text, firstLine) : rawRatePolicy(nodes, state);
     const preview = await request<{ form: ConfigForm; content: string }>("/config-form/preview", {
@@ -120,13 +121,7 @@ export async function matchSavedConfig(
       const matches = generated.filter(
         (d) => d.words[0] === n.words[0] && d.words.at(-1) === n.words.at(-1),
       );
-      if (
-        !matches.some(
-          (d) =>
-            ruleDirectives(routing.slice(d.start, d.end)) ===
-            ruleDirectives(text.slice(n.start, n.end)),
-        )
-      )
+      if (!matches.some(d => routingDirectivesMatch(n, d)))
         throw Error("动态路由变量的生成结果与原文不同");
     }
     return preview.form;
@@ -154,7 +149,10 @@ export async function matchSavedConfig(
     "/config-form/preview",
     { method: "POST", body: JSON.stringify(candidate) },
   );
-  if (ruleDirectives(preview.content) !== signature)
+  const equivalent = candidate.kind === "upstreams" || candidate.kind === "streams"
+    ? rawFormEquivalent(candidate.kind, text, preview.content)
+    : ruleDirectives(preview.content) === signature;
+  if (!equivalent)
     throw Error(
       "这段配置包含无法完整还原的指令，请核对原文或复制包含表单注释的配置",
     );

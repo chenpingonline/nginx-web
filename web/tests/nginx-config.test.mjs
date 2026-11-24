@@ -237,3 +237,81 @@ test("Try Files accepts Nginx arguments and legacy commas, preserving quoted fil
   assert.throws(() => parseTryFiles("$uri"), /回退/);
   assert.throws(() => parseTryFiles('$uri "missing'), /引号/);
 });
+
+test("resolve declared HTTP pools without losing the original Host or URI", () => {
+  const id = "abcdefabcdef";
+  const pools = new Map([["api_pool", id]]);
+  const body = directives => `server { listen 19092; server_name pools.test; location / {
+    proxy_pass http://api_pool/backend/; ${directives}
+  } }`;
+  const root = importBlocks(body(""), "", 1, pools).rules[0].root_location;
+  assert.equal(root.upstream_pool_id, id);
+  assert.equal(root.upstream_path, "/backend/");
+  const mixed = importBlocks(body("").replace("api_pool/", "API_Pool/"), "", 1, pools).rules[0].root_location;
+  assert.equal(mixed.upstream_pool_id, id);
+  assert.equal(mixed.request_headers[0].value, "API_Pool");
+  assert.deepEqual(root.request_headers.map(h => [h.name,h.value]), [["Host", "api_pool"]]);
+  const headers = importBlocks(body("proxy_set_header Host $host; add_header X-Backend $proxy_host;"), "", 1, pools).rules[0].root_location;
+  assert.equal(headers.request_headers[0].value, "$host");
+  assert.equal(headers.response_headers[0].value, "api_pool");
+  assert.equal(importBlocks(body("").replace("api_pool", "fnproxy_up_" + id), "").rules[0].root_location.upstream_pool_id, id);
+  assert.throws(() => importBlocks(body(""), ""), /proxy_pass/);
+  assert.throws(() => importBlocks(body("proxy_ssl_server_name on;").replace("http:", "https:"), "", 1, pools), /proxy_pass/);
+});
+
+test("recover server-level static root and Nginx-escaped location regexes", () => {
+  const source = String.raw`server { listen 19093; server_name spa.test;
+    root /srv/www; index home.html;
+    location ~* "\\.(js|css)$" { expires 1h; }
+    location ~ \.txt$ { return 204; }
+  }`;
+  const rule = importBlocks(source, "").rules[0];
+  assert.equal(rule.root_location.static_path, "/srv/www");
+  assert.deepEqual(rule.root_location.index_files, ["home.html"]);
+  assert.deepEqual(rule.locations.map(l => l.path), [String.raw`\.(js|css)$`, String.raw`\.txt$`]);
+});
+
+test("restore independent effective buffering for each location and standalone fragments", () => {
+  const config = `server {listen 19094; server_name ws.test;
+    location / {proxy_pass http://127.0.0.1:8080; proxy_buffering off;}
+    location /mixed {proxy_pass http://127.0.0.1:8080; proxy_buffering on; proxy_request_buffering off;}
+    location /inherited {proxy_pass http://127.0.0.1:8080;}
+  }`;
+  const rule = importBlocks(config, "").rules[0];
+  assert.equal(rule.root_location.proxy_buffering, false);
+  assert.equal(rule.root_location.proxy_request_buffering, undefined);
+  assert.equal(rule.locations[0].settings.proxy_buffering, true);
+  assert.equal(rule.locations[0].settings.proxy_request_buffering, false);
+  assert.equal(rule.locations[1].settings.proxy_buffering, undefined);
+  const raw = "location /ws/ {proxy_pass http://127.0.0.1:8080; proxy_request_buffering on;}";
+  assert.equal(importBlocks(raw, "target").location.settings.proxy_request_buffering, true);
+  assert.throws(() => importBlocks(raw.replace("on;", "maybe;"), "target"), /proxy_request_buffering/);
+  assert.throws(() => importBlocks(raw.replace("on;", "on; proxy_request_buffering off;"), "target"), /proxy_request_buffering/);
+});
+
+test("convert wildcard listeners, older TLS HTTP/2 syntax and integral MiB request limits", () => {
+  const cert = "/cert/abcdefabcdef/";
+  const config = `server {listen *:19443 ssl http2; listen [::]:19443 ssl http2; server_name site.test;
+    ssl_certificate ${cert}fullchain.pem; ssl_certificate_key ${cert}privkey.pem;
+    client_max_body_size 2048k; location / { return 204; }}`;
+  const rule = importBlocks(config, "").rules[0];
+  assert.equal(rule.listen_type, "dual");
+  assert.equal(rule.http2, true);
+  assert.equal(rule.client_max_body_mb, 2);
+  assert.throws(() => importBlocks(config.replace("2048k", "512k"), ""), /client_max_body_size/);
+  assert.throws(() => importBlocks(config.replace("[::]:19443 ssl http2", "[::]:19443 ssl"), ""), /listen/);
+});
+
+test("persist and restore the original upstream redirect mapping", () => {
+  const id = "abcdefabcdef", pools = new Map([["old_pool", id]]);
+  const parse = (name, uri, redirect) => importBlocks(`location /api/ { proxy_pass http://${name}${uri}; ${redirect} }`, "target", 1, pools).location.settings;
+  for (const uri of ["", "/backend/", "/backend"]) {
+    const stored = parse("Old_Pool", uri, "proxy_redirect default;");
+    assert.deepEqual(stored.proxy_redirect, {pool_id: id, original_host: "Old_Pool"});
+    const canonical = `proxy_redirect "http://Old_Pool${uri || "/"}" "${uri ? "/api/" : "/"}";`;
+    assert.deepEqual(parse("fnproxy_up_" + id, uri, canonical).proxy_redirect, stored.proxy_redirect);
+  }
+  assert.deepEqual(parse("Old_Pool", "/backend", "proxy_redirect off;").proxy_redirect, {pool_id: id, disabled: true});
+  assert.throws(() => parse("Old_Pool", "", "proxy_redirect ~pattern replacement;"), /proxy_redirect/);
+  assert.throws(() => parse("fnproxy_up_" + id, "", "proxy_redirect http://old/wrong/ /;"), /proxy_redirect/);
+});

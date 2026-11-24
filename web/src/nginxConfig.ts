@@ -85,7 +85,13 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
     active = true;
     if (c === "\\") {
       if (++i === source.length) fail(line, "末尾转义不完整");
-      word += c + source[i];
+      // ngx_conf_read_token unescapes quotes, backslashes and control escapes.
+      const escape = source[i];
+      if (escape === "t") word += "\t";
+      else if (escape === "r") word += "\r";
+      else if (escape === "n") word += "\n";
+      else if (escape === "\\" || escape === "'" || escape === '"') word += escape;
+      else word += c + escape;
       if (source[i] === "\n") line++;
     } else if (quote && c === quote) quote = "";
     else if (!quote && (c === "'" || c === '"')) quote = c;
@@ -293,7 +299,8 @@ const gatewayParams: Record<string,string[]> = {
   uwsgi: [...commonParams, ...requestParams, "SERVER_NAME $server_name"],
   scgi: ["CONTENT_LENGTH $content_length", "SCGI 1", "REQUEST_METHOD $request_method", "REQUEST_URI $request_uri", "QUERY_STRING $query_string", ...requestParams.slice(1)],
 };
-function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.html"]) {
+const managedHTTPPool = /^fnproxy_up_([a-f0-9]{12,64})$/;
+function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, staticRoot = "", indexFiles = ["index.html"]) {
   const [, ...args] = node.words;
   const path = args[args.length - 1];
   const modifiers = new Map([["=", "exact"], ["~", "regex"], ["~*", "regex_i"], ["^~", "priority_prefix"]]);
@@ -305,7 +312,7 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     !node.children ||
     args.length > 2 ||
     !path ||
-    (/[\\`]/.test(path) || path.includes("$") && !(match?.startsWith("regex") && path.indexOf("$") === path.length - 1))
+    (/[\r\n`]/.test(path) || (!match.startsWith("regex") && /[\\$]/.test(path)))
   )
     unsupported(node);
   const settings: Partial<LocationSettings> = { backend_type: "proxy" };
@@ -314,6 +321,8 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
   const handler = handlers[0];
   const kind = handler?.words[0];
   const isProxy = kind === "proxy_pass";
+  let renamedPool = "";
+  let redirect: Directive | undefined;
   const localRoot = node.children.find(d => d.words[0] === "root" || d.words[0] === "alias");
   if (localRoot) {
     const value = localRoot.words[1];
@@ -330,10 +339,12 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     else if (name.endsWith("_pass") && handler.words.length === 2) {
       const address = /^(?:(grpcs?):\/\/)?(\[[\da-fA-F:]+\]|[\w.-]+)(?::(\d+))?$/.exec(value);
       if (!address || (name === "grpc_pass") !== !!address[1]) unsupported(handler);
-      const pool = /^fnproxy_up_([a-f0-9]+)$/.exec(address[2]);
+      const pool = !address[3] && (managedHTTPPool.exec(address[2])?.[1] ?? pools.get(address[2].toLowerCase()));
+      // gRPC uses its upstream name as the default :authority.
+      if (name === "grpc_pass" && pools.has(address[2].toLowerCase()) && !managedHTTPPool.test(address[2])) unsupported(handler);
       if (!address[3] && !pool) unsupported(handler);
       Object.assign(settings,{backend_type:name.slice(0,-5),upstream_scheme:address[1] === "grpcs" ? "https" : "http",
-        upstream_host:address[2].replace(/^\[|\]$/g,""),upstream_port:Number(address[3] || 0),upstream_pool_id:pool?.[1] ?? ""});
+        upstream_host:address[2].replace(/^\[|\]$/g,""),upstream_port:Number(address[3] || 0),upstream_pool_id:pool || ""});
     } else unsupported(handler);
   } else if (staticRoot) Object.assign(settings, {backend_type:"static", static_path:staticRoot, static_alias:localRoot?.words[0] === "alias", index_files:indexFiles});
   else unsupported(node);
@@ -384,6 +395,12 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
       continue;
     }
     if (d.children || seen.has(name)) unsupported(d);
+    if (name === "proxy_redirect" && isProxy) {
+      if (value === "default" && d.start < handler.start) unsupported(d);
+      seen.add(name);
+      redirect = d;
+      continue;
+    }
     if (d === dav || name === "valid_referers" || (name === "sub_filter_types" && hasSubFilter)) {
       if (d.words.length < 2) unsupported(d);
       if (name === "valid_referers") settings.valid_referers = d.words.slice(1);
@@ -419,22 +436,33 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     else if (name === "auth_request") settings.auth_request = value;
     else if (name === "auth_basic" && value !== "off") Object.assign(settings, {basic_auth:true,basic_auth_realm:value});
     else if (name === "auth_basic_user_file") settings.basic_auth_file = value;
+    else if (isProxy && (name === "proxy_buffering" || name === "proxy_request_buffering") && ["on", "off"].includes(value))
+      settings[name] = value === "on";
     else if (name === "proxy_ssl_server_name" && isProxy && ["on","off"].includes(value)) settings.proxy_ssl_server_name = value === "on";
-    else if (name === "proxy_ssl_name" && isProxy && value === node.children.find(d=>d.words[0]==="proxy_pass")?.words[1]?.match(/^https:\/\/(\[[^\]]+\]|[^:/]+)/)?.[1].replace(/^\[|\]$/g,"")) continue;
+    else if (name === "proxy_ssl_name" && isProxy) {
+      const targetHost = handler.words[1].match(/^https:\/\/(\[[^\]]+\]|[^:/]+)/)?.[1];
+      if (!targetHost || value !== (pools.has(targetHost.toLowerCase()) || managedHTTPPool.test(targetHost) ? "$host" : targetHost.replace(/^\[|\]$/g, ""))) unsupported(d);
+    }
     else if (name === "proxy_ssl_verify" && isProxy && value === "off") continue;
     else if (name === "proxy_pass") {
       const target =
-        /^(https?):\/\/(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?(\/[a-zA-Z0-9/._~+\-]*)?$/.exec(
+        /^(https?):\/\/(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9._-]+)(?::(\d+))?(\/[a-zA-Z0-9/._~+\-]*)?$/.exec(
           value,
         );
+      const host = target?.[2] ?? "";
+      const pool = !target?.[3] && (managedHTTPPool.exec(host)?.[1] ?? pools.get(host.toLowerCase()));
       // Bare names may refer to an upstream group in a different file.
       if (
         !target || (["regex", "regex_i", "named"].includes(match) && !!target[4]) ||
-        (!target[3] && !target[2].includes(".") && !target[2].startsWith("["))
+        (!pool && !target[3] && !target[2].includes(".") && !target[2].startsWith("["))
       )
         unsupported(d);
       settings.upstream_path = target[4] ?? "";
       settings.upstream_scheme = target[1] as "http" | "https";
+      if (pool) {
+        settings.upstream_pool_id = pool;
+        if (host !== "fnproxy_up_" + pool) renamedPool = host;
+      }
       settings.upstream_host = target[2].replace(/^\[|\]$/g, "");
       settings.upstream_port = Number(
         target[3] ?? (target[1] === "https" ? 443 : 80),
@@ -452,6 +480,33 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     }
   }
 
+  if (settings.upstream_pool_id && isProxy && settings.proxy_ssl_server_name && !seen.has("proxy_ssl_name"))
+    unsupported(handler!);
+  if (renamedPool) {
+    for (const d of node.children) {
+      if (!["proxy_set_header", "add_header"].includes(d.words[0]) && d.words.some(word => /\$proxy_host\b|\$\{proxy_host\}/.test(word))) unsupported(d);
+    }
+    const headers = settings.request_headers ??= [];
+    if (!headers.some(header => header.name.toLowerCase() === "host"))
+      headers.push({name: "Host", value: renamedPool, always: false});
+    for (const header of [...headers, ...(settings.response_headers ?? [])]) {
+      header.value = header.value.replace(/\$proxy_host\b|\$\{proxy_host\}/g, renamedPool);
+    }
+  }
+  if (redirect?.words.length === 2 && redirect.words[1] === "off") {
+    settings.proxy_redirect = {pool_id: settings.upstream_pool_id, disabled: true};
+  } else {
+    let originalHost = renamedPool;
+    if (redirect && !(redirect.words.length === 2 && redirect.words[1] === "default")) {
+      // Also recognize our own explicit mapping when re-importing generated text.
+      const [scheme, host, uri] = (redirect.words[1] ?? "").match(/^(https?):\/\/([\w.-]+)(\/.*)$/)?.slice(1) ?? [];
+      if (redirect.words.length !== 3 || !settings.upstream_pool_id || renamedPool ||
+          scheme !== settings.upstream_scheme || uri !== (settings.upstream_path || "/") ||
+          redirect.words[2] !== (settings.upstream_path ? path : "/")) unsupported(redirect);
+      originalHost = host;
+    }
+    if (originalHost) settings.proxy_redirect = {pool_id: settings.upstream_pool_id, original_host: originalHost};
+  }
   const defaults = gatewayParams[settings.backend_type ?? ""];
   if (defaults && (params.length !== defaults.length || params.some((p,i) => p !== defaults[i]))) unsupported(node);
   if (settings.backend_type === "memcached" && !seen.has("memcached_key")) unsupported(node);
@@ -460,12 +515,12 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     settings.proxy_ssl_server_name = false;
   return { id: newID(), name: path, path, match, enabled: true, settings };
 }
-export function importBlocks(source: string, target: string, firstLine = 1) {
+export function importBlocks(source: string, target: string, firstLine = 1, pools: ReadonlyMap<string, string> = new Map()) {
   const blocks = parseConfig(source, firstLine);
   if (!blocks.length) throw new Error("请输入 server 或 location 配置块");
   if (blocks.length === 1 && blocks[0].words[0] === "location") {
     if (!target) throw new Error("请选择目标代理");
-    return { target, location: convertLocation(blocks[0]) };
+    return { target, location: convertLocation(blocks[0], pools) };
   }
   const rules = blocks.map((block) => {
     if (block.words.join(" ") !== "server" || !block.children)
@@ -474,6 +529,7 @@ export function importBlocks(source: string, target: string, firstLine = 1) {
       domains: string[] = [];
     const families = new Set<string>();
     const paths: Directive[] = [];
+    let legacyHTTP2: boolean | undefined;
     let tls: boolean | undefined, catchAll: boolean | undefined, http2 = false, cert = "", key = "", tracking = "", redirectPort = 0;
     let staticRoot = "", indexFiles: string[] | undefined, bodyLimit: number | undefined;
     for (const d of block.children) {
@@ -488,11 +544,14 @@ export function importBlocks(source: string, target: string, firstLine = 1) {
         const target = /^https:\/\/\$host(?::([0-9]+))?\$request_uri$/.exec(d.words[2]);
         if (!target) unsupported(d);
         redirectPort = Number(target[1] || 443);
-      } else if (name === "listen" && d.words.slice(2).every(option=>option==="ssl" || option==="default_server")) {
-        const secure = d.words.includes("ssl"), fallback = d.words.includes("default_server");
+      } else if (name === "listen" && d.words.slice(2).every(option => ["ssl", "http2", "default_server", "default"].includes(option))) {
+        const secure = d.words.includes("ssl"), fallback = d.words.includes("default_server") || d.words.includes("default");
+        const listenHTTP2 = d.words.includes("http2");
+        if ((legacyHTTP2 !== undefined && legacyHTTP2 !== listenHTTP2) || (listenHTTP2 && !secure)) unsupported(d);
+        legacyHTTP2 = listenHTTP2;
         if ((tls !== undefined && tls !== secure) || (catchAll !== undefined && catchAll !== fallback)) unsupported(d);
         tls = secure; catchAll = fallback;
-        const address = /^(?:(0\.0\.0\.0|\[::\]):)?([1-9]\d*)$/.exec(value);
+        const address = /^(?:(\*|0\.0\.0\.0|\[::\]):)?([1-9]\d*)$/.exec(value);
         if (!address) unsupported(d);
         const family = address[1] === "[::]" ? "ipv6" : "ipv4";
         if (families.has(family) || (port && port !== Number(address[2]))) unsupported(d);
@@ -502,8 +561,12 @@ export function importBlocks(source: string, target: string, firstLine = 1) {
         staticRoot = value;
       } else if (name === "index" && d.words.length > 1 && !indexFiles) {
         indexFiles = d.words.slice(1);
-      } else if (name === "client_max_body_size" && d.words.length === 2 && bodyLimit === undefined && /^(0|[1-9]\d*[mM])$/.test(value)) {
-        bodyLimit = parseInt(value, 10);
+      } else if (name === "client_max_body_size" && d.words.length === 2 && bodyLimit === undefined) {
+        const size = /^(\d+)([kKmMgG]?)$/.exec(value);
+        if (!size) unsupported(d);
+        const bytes = Number(size[1]) * ({k: 1024, m: 1048576, g: 1073741824}[size[2].toLowerCase()] ?? 1);
+        if (!Number.isSafeInteger(bytes) || bytes % 1048576 !== 0) unsupported(d);
+        bodyLimit = bytes / 1048576;
       }
       else if (
         d.words[0] === "server_name" &&
@@ -514,11 +577,16 @@ export function importBlocks(source: string, target: string, firstLine = 1) {
         domains = d.words.slice(1);
       else unsupported(d);
     }
+    http2 ||= !!legacyHTTP2;
     const certID = cert.match(/\/([a-f0-9]{12,64})\/fullchain\.pem$/)?.[1];
     if (tls ? !certID || key !== cert.replace(/fullchain\.pem$/, "privkey.pem") : !!(cert || key || http2))
       fail(block.line, "HTTPS 规则需要目标机已导入的证书和匹配的私钥路径");
     if (catchAll && domains.join(" ") !== "_") fail(block.line,"默认站点域名无法完整还原");
-    const locations = paths.map(path => convertLocation(path, staticRoot, indexFiles));
+    const locations = paths.map(path => convertLocation(path, pools, staticRoot, indexFiles));
+    if (staticRoot && !redirectPort && !locations.some(l => l.path === "/" && ["prefix", "priority_prefix"].includes(l.match))) {
+      // A server-level root also serves requests unmatched by explicit locations.
+      locations.unshift(convertLocation({...block, words: ["location", "/"], children: []}, pools, staticRoot, indexFiles));
+    }
     if ((staticRoot || indexFiles) && !locations.some(l => l.settings.backend_type === "static"))
       fail(block.line, "静态目录和首页需要对应的静态文件路径");
     const roots = locations.filter(

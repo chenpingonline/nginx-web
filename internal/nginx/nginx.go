@@ -1395,6 +1395,22 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 			}
 		}
 		fmt.Fprintf(builder, "        proxy_pass %s;\n", target)
+		if redirect := settings.ProxyRedirect; redirect != nil && redirect.PoolID == settings.UpstreamPoolID {
+			if redirect.Disabled {
+				builder.WriteString("        proxy_redirect off;\n")
+			} else {
+				// Match Nginx's default redirect translation for the pre-import upstream name.
+				from := settings.UpstreamScheme + "://" + redirect.OriginalHost
+				to := path
+				if settings.UpstreamPath == "" {
+					from += "/"
+					to = "/"
+				} else {
+					from += settings.UpstreamPath
+				}
+				fmt.Fprintf(builder, "        proxy_redirect %s %s;\n", nginxDirectiveQuote(from), nginxDirectiveQuote(to))
+			}
+		}
 		m.renderProxySettings(builder, rule, settings, cacheID)
 	}
 	builder.WriteString("    }\n")
@@ -1474,10 +1490,14 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 	fmt.Fprintf(builder, "        proxy_connect_timeout %ds;\n", rule.ConnectTimeoutSeconds)
 	fmt.Fprintf(builder, "        proxy_read_timeout %ds;\n", rule.ReadTimeoutSeconds)
 	fmt.Fprintf(builder, "        proxy_send_timeout %ds;\n", rule.SendTimeoutSeconds)
-	if rule.Streaming || rule.WebSocket {
+	if settings.ProxyBuffering != nil {
+		fmt.Fprintf(builder, "        proxy_buffering %s;\n", onOff(*settings.ProxyBuffering))
+	} else if rule.Streaming || rule.WebSocket {
 		builder.WriteString("        proxy_buffering off;\n")
 	}
-	if rule.Streaming {
+	if settings.ProxyRequestBuffering != nil {
+		fmt.Fprintf(builder, "        proxy_request_buffering %s;\n", onOff(*settings.ProxyRequestBuffering))
+	} else if rule.Streaming {
 		builder.WriteString("        proxy_request_buffering off;\n")
 	}
 	renderRateLimits(builder, rule)

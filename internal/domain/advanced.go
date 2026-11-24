@@ -199,13 +199,24 @@ type DAVSettings struct {
 	MinDeleteDepth    int      `json:"min_delete_depth"`
 }
 
+// ProxyRedirect records the redirect behavior of an imported proxy. Pool IDs
+// bind the original name to the upstream that was renamed on import.
+type ProxyRedirect struct {
+	PoolID       string `json:"pool_id,omitempty"`
+	OriginalHost string `json:"original_host,omitempty"`
+	Disabled     bool   `json:"disabled,omitempty"`
+}
+
 type LocationSettings struct {
-	ProxySSLServerName     *bool  `json:"proxy_ssl_server_name,omitempty"`
-	UpstreamPath           string `json:"upstream_path,omitempty"`
-	ProxyPassTrailingSlash bool   `json:"proxy_pass_trailing_slash,omitempty"`
-	ConnectTimeoutSeconds  int    `json:"connect_timeout_seconds,omitempty"`
-	ReadTimeoutSeconds     int    `json:"read_timeout_seconds,omitempty"`
-	SendTimeoutSeconds     int    `json:"send_timeout_seconds,omitempty"`
+	ProxyBuffering         *bool          `json:"proxy_buffering,omitempty"`
+	ProxyRequestBuffering  *bool          `json:"proxy_request_buffering,omitempty"`
+	ProxyRedirect          *ProxyRedirect `json:"proxy_redirect,omitempty"`
+	ProxySSLServerName     *bool          `json:"proxy_ssl_server_name,omitempty"`
+	UpstreamPath           string         `json:"upstream_path,omitempty"`
+	ProxyPassTrailingSlash bool           `json:"proxy_pass_trailing_slash,omitempty"`
+	ConnectTimeoutSeconds  int            `json:"connect_timeout_seconds,omitempty"`
+	ReadTimeoutSeconds     int            `json:"read_timeout_seconds,omitempty"`
+	SendTimeoutSeconds     int            `json:"send_timeout_seconds,omitempty"`
 
 	BackendType          string             `json:"backend_type"`
 	UpstreamScheme       string             `json:"upstream_scheme"`
@@ -315,8 +326,15 @@ func ApplyStateDefaults(state *State) {
 	if state.Settings.Logging.RotateKeep == 0 {
 		state.Settings.Logging.RotateKeep = defaults.Logging.RotateKeep
 	}
-	if state.Settings.Routing.Maps == nil {
-		state.Settings.Routing = DynamicRoutingSettings{Maps: []MapDefinition{}, Geos: []GeoDefinition{}, Splits: []SplitDefinition{}}
+	routing := &state.Settings.Routing
+	if routing.Maps == nil {
+		routing.Maps = []MapDefinition{}
+	}
+	if routing.Geos == nil {
+		routing.Geos = []GeoDefinition{}
+	}
+	if routing.Splits == nil {
+		routing.Splits = []SplitDefinition{}
 	}
 	if state.Rules == nil {
 		state.Rules = []ProxyRule{}
@@ -474,6 +492,9 @@ func NormalizeLocationSettings(settings *LocationSettings) {
 	if settings.BackendType == "" {
 		settings.BackendType = "proxy"
 	}
+	if r := settings.ProxyRedirect; r != nil && (settings.BackendType != "proxy" || r.PoolID != settings.UpstreamPoolID) {
+		settings.ProxyRedirect = nil
+	}
 	if settings.UpstreamScheme == "" {
 		settings.UpstreamScheme = "http"
 	}
@@ -573,7 +594,16 @@ var namedLocationPattern = regexp.MustCompile(`^@[A-Za-z0-9_-]+$`)
 
 var upstreamPathPattern = regexp.MustCompile(`^/[A-Za-z0-9/._~+-]*$`)
 
+var redirectUpstreamName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,255}$`)
+
 func ValidateLocationSettings(settings LocationSettings, pools map[string]UpstreamPool) error {
+	if r := settings.ProxyRedirect; r != nil {
+		if r.PoolID != settings.UpstreamPoolID || settings.BackendType != "proxy" ||
+			(!r.Disabled && (r.PoolID == "" || !redirectUpstreamName.MatchString(r.OriginalHost))) ||
+			(r.Disabled && r.OriginalHost != "") {
+			return errors.New("代理重定向的原服务组或名称无效")
+		}
+	}
 	if settings.UpstreamPath != "" && !upstreamPathPattern.MatchString(settings.UpstreamPath) {
 		return errors.New("上游路径须以 / 开头，仅支持固定路径")
 	}
@@ -1038,23 +1068,24 @@ func validateDynamicRouting(settings DynamicRoutingSettings) error {
 		return errors.New("动态路由定义不能超过 64 个")
 	}
 	checkVariable := func(value string) bool { return variablePattern.MatchString(value) }
-	checkValue := func(value string) bool { return value != "" && !strings.ContainsAny(value, "{};\r\n") }
+	checkOutput := func(value string) bool { return !strings.ContainsAny(value, "{};\r\n") }
+	checkKey := func(key string) bool { return key != "" && checkOutput(key) }
 	for _, item := range settings.Maps {
-		if item.Name == "" || !checkVariable(item.Source) || !checkVariable(item.Variable) || !checkValue(item.Default) {
+		if item.Name == "" || !checkVariable(item.Source) || !checkVariable(item.Variable) || !checkOutput(item.Default) {
 			return errors.New("Map 定义不完整或包含不安全值")
 		}
 		for _, entry := range item.Entries {
-			if !checkValue(entry.Key) || !checkValue(entry.Value) {
+			if !checkKey(entry.Key) || !checkOutput(entry.Value) {
 				return errors.New("Map 条目不合法")
 			}
 		}
 	}
 	for _, item := range settings.Geos {
-		if item.Name == "" || (item.Source != "" && !checkVariable(item.Source)) || !checkVariable(item.Variable) || !checkValue(item.Default) {
+		if item.Name == "" || (item.Source != "" && !checkVariable(item.Source)) || !checkVariable(item.Variable) || !checkOutput(item.Default) {
 			return errors.New("Geo 定义不完整或包含不安全值")
 		}
 		for _, entry := range item.Entries {
-			if !checkValue(entry.Key) || !checkValue(entry.Value) {
+			if !checkKey(entry.Key) || !checkOutput(entry.Value) {
 				return errors.New("Geo 条目不合法")
 			}
 			if entry.Key != "default" && net.ParseIP(entry.Key) == nil {
@@ -1070,7 +1101,7 @@ func validateDynamicRouting(settings DynamicRoutingSettings) error {
 			return errors.New("Split Clients 定义不完整")
 		}
 		for index, entry := range item.Entries {
-			if (!percentage.MatchString(entry.Key) && !(entry.Key == "*" && index == len(item.Entries)-1)) || !checkValue(entry.Value) {
+			if (!percentage.MatchString(entry.Key) && !(entry.Key == "*" && index == len(item.Entries)-1)) || !checkOutput(entry.Value) {
 				return errors.New("Split Clients 条目不合法")
 			}
 		}

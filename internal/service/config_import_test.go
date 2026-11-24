@@ -76,3 +76,26 @@ func TestSourceRuleReplacementIsAtomic(t *testing.T) {
 		t.Fatal("conversion changed another block")
 	}
 }
+
+func TestImportSiteAndPoolInOneDraft(t *testing.T) {
+	s := testService(t)
+	pool := domain.UpstreamPool{ID: "abcdef123456", Name: "app", Protocol: "http", Servers: []domain.UpstreamServer{{Host: "127.0.0.1", Port: 9010}}}
+	rule := ProxyRule{ID: "abcdef123457", Name: "site", Domains: []string{"import.test"}, ListenPort: 19400, UpstreamPoolID: pool.ID, Enabled: true}
+	input := ConfigImport{Pools: []domain.UpstreamPool{pool}, Rules: []ProxyRule{rule}}
+	preview, err := s.ImportConfig(input, false)
+	if err != nil || len(preview) != 2 || !strings.Contains(preview[0], "upstream fnproxy_up_"+pool.ID) || !strings.Contains(preview[1], "proxy_pass http://fnproxy_up_"+pool.ID) {
+		t.Fatalf("preview: %v %v", preview, err)
+	}
+	input.Expected = preview
+	input.Pools[0].Servers[0].Port++
+	if _, err := s.ImportConfig(input, true); err == nil || len(s.State().Rules) != 0 || len(s.State().UpstreamPools) != 0 {
+		t.Fatal("stale preview partially committed")
+	}
+	input.Pools[0].Servers[0].Port--
+	if _, err := s.ImportConfig(input, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportConfig(input, true); err == nil || len(s.State().Rules) != 1 || len(s.State().UpstreamPools) != 1 {
+		t.Fatal("duplicate commit")
+	}
+}

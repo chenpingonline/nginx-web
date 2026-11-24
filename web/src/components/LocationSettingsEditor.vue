@@ -17,6 +17,10 @@ const props = defineProps<{
   ruleAuthEnabled?: boolean;
 }>();
 
+const bufferingFields = [
+  {key: "proxy_buffering", label: "响应缓冲"},
+  {key: "proxy_request_buffering", label: "请求缓冲"},
+] as const;
 const timeoutFields = [
   {key:"connect_timeout_seconds", label:"连接超时（秒）", max:600},
   {key:"read_timeout_seconds", label:"读取超时（秒）", max:86400},
@@ -244,8 +248,15 @@ async function directoryAction(action: "select" | "authorize") {
       <summary>路径高级设置<span>缓存、重写、鉴权与 Header</span></summary>
       <div class="location-settings path-advanced-content">
     <details v-if="model.backend_type === 'proxy'" class="advanced-box full">
-      <summary>缓存与大文件切片</summary>
+      <summary>缓冲、缓存与大文件切片</summary>
       <div class="form-grid compact-grid">
+        <div v-for="field in bufferingFields" :key="field.key" class="field buffering-field">
+          <label :for="timeoutId + field.key">{{ field.label }}</label>
+          <AppSelect :id="timeoutId + field.key" :model-value="model[field.key] == null ? '' : model[field.key] ? 'on' : 'off'"
+            @update:model-value="value => { model[field.key] = value === '' ? undefined : value === 'on'; }" class="select">
+            <option value="">继承规则</option><option value="on">开启</option><option value="off">关闭</option>
+          </AppSelect>
+        </div>
         <label class="checkbox-row field full"><input v-model="model.cache.enabled" type="checkbox" /> 启用代理缓存</label>
         <template v-if="model.cache.enabled">
           <div class="field"><label>缓存区（MB）</label><input v-model.number="model.cache.keys_zone_mb" class="input" type="number" min="1" /></div>
@@ -350,6 +361,7 @@ async function directoryAction(action: "select" | "authorize") {
 </template>
 
 <style scoped>
+.buffering-field > label { justify-self: end; font-weight: 600; color: var(--text); }
 .rule-modal .rule-form-grid .location-settings > .timeout-field { display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:8px; }
 .timeout-field label { color:var(--text);font-weight:600; }
 .timeout-field input { min-width:0;width:100%; }

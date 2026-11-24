@@ -64,7 +64,7 @@ function toggle(entry: SourceEntry) {
                     {{ expanded.has(keyOf(item)) ? '收起详情' : '展开详情' }}
                   </button>
                   <button v-if="(ruleEditor || streamEditor) && !item.error" type="button" class="button ghost small" @click="$emit('rule', item)">编辑</button>
-                  <button v-if="!ruleEditor && !item.error" type="button" class="button small" @click="editing = item">编辑参数</button>
+                  <button v-if="!item.error" type="button" class="button small" @click="editing = item">编辑参数</button>
                   <button v-if="ruleEditor && !item.error" type="button" class="button danger-ghost small" :disabled="busy" @click="$emit('remove', item)">删除</button>
                 </div>
               </td>

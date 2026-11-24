@@ -2,8 +2,8 @@ package service
 
 import (
 	"errors"
+	"slices"
 	"strings"
-
 	"time"
 
 	"github.com/chenpingonline/nginx-web/internal/domain"
@@ -51,11 +51,12 @@ func (s *AppService) DeleteSourceBlock(source ImportSource) error {
 }
 
 type ConfigImport struct {
-	Source   *ImportSource        `json:"source,omitempty"`
-	Rules    []domain.ProxyRule   `json:"rules"`
-	Target   string               `json:"target"`
-	Location *domain.LocationRule `json:"location"`
-	Expected []string             `json:"expected,omitempty"`
+	Source   *ImportSource         `json:"source,omitempty"`
+	Pools    []domain.UpstreamPool `json:"pools,omitempty"`
+	Rules    []domain.ProxyRule    `json:"rules"`
+	Target   string                `json:"target"`
+	Location *domain.LocationRule  `json:"location"`
+	Expected []string              `json:"expected,omitempty"`
 }
 
 func (s *AppService) ImportConfig(input ConfigImport, save bool) ([]string, error) {
@@ -86,6 +87,21 @@ func (s *AppService) importConfig(input ConfigImport, save bool, normalized *dom
 			}
 		}
 		now := time.Now().UTC()
+		if len(input.Pools) > 0 {
+			if input.Source != nil || input.Location != nil || len(input.Rules) == 0 || len(input.Pools) > 100 {
+				return errors.New("转发服务组须与 HTTP 站点一起导入，每次最多 100 个服务组")
+			}
+			if !state.Settings.MenuEnabled("upstreams") || !state.Settings.MenuEnabled("rules") {
+				return errors.New("请先启用 HTTP 代理和转发服务组")
+			}
+			for _, pool := range input.Pools {
+				if !domain.ValidID(pool.ID) || pool.Protocol != "http" {
+					return errors.New("HTTP 转发服务组标识或协议无效")
+				}
+				pool.CreatedAt, pool.UpdatedAt = now, now
+				state.UpstreamPools = append(state.UpstreamPools, pool)
+			}
+		}
 		var ids []string
 		if input.Location != nil {
 			if !domain.ValidID(input.Target) || len(input.Rules) != 0 {
@@ -147,15 +163,22 @@ func (s *AppService) importConfig(input ConfigImport, save bool, normalized *dom
 		if normalized != nil {
 			*normalized = state.Rules[len(state.Rules)-1]
 		}
-		for i, id := range ids {
+		for _, pool := range input.Pools {
+			content, err := s.nginx.FormConfig(*state, "upstreams", pool.ID)
+			if err != nil {
+				return err
+			}
+			output = append(output, content)
+		}
+		for _, id := range ids {
 			content, err := s.nginx.RuleConfig(*state, id, false)
 			if err != nil {
 				return err
 			}
-			if save && (len(input.Expected) != len(ids) || input.Expected[i] != content) {
-				return errors.New("规则配置已变化，请重新预览")
-			}
 			output = append(output, content)
+		}
+		if save && !slices.Equal(input.Expected, output) {
+			return errors.New("规则配置已变化，请重新预览")
 		}
 		return nil
 	}

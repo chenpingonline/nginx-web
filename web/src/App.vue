@@ -403,9 +403,10 @@ async function openSourceError(entry: SourceEntry, error: unknown) {
   toast(errorMessage(error) + "。已打开源文件。", "error");
   await editSource(entry, error instanceof ConfigLineError ? error.line : entry.line);
 }
-async function keepSource(source: string, line?: number) {
+async function keepSource(source: string, stream: boolean, line?: number) {
   importing.value = false;
   openCustomConfig();
+  if (stream) customConfigForm.name = "custom-config.stream";
   customConfigForm.content = source;
   if (line !== undefined) {
     await nextTick();
@@ -1739,7 +1740,7 @@ onBeforeUnmount(() => {
   </div>
   <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
   <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
-  <ConfigDialog v-if="state && (importing || rulePreview)" :state="state" :open-form="openImportedForm" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
+  <ConfigDialog v-if="state && (importing || rulePreview)" :state="state" :open-form="openImportedForm" :stream-page="page === 'streams'" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
   <SourceParameterDialog v-if="parameterFile" :entry="{ file: parameterFile, title: parameterFile.name }" @close="parameterFile = undefined" @saved="parameterFile = undefined; sourceSaved()" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">

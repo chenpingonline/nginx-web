@@ -1,22 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { configBody, formPrefix, matchSavedConfig, type ConfigForm } from "../configForm";
-import { ConfigLineError, importBlocks, parseConfig } from "../nginxConfig";
+import { configBody, formPrefix, type ConfigForm } from "../configForm";
+import { ConfigLineError, parseConfig } from "../nginxConfig";
 import { request, jsonBody, errorMessage } from "../api";
 import type { ProxyRule } from "../types";
+import { configFragment, externalPool, previewImport, type ImportDraft } from "../configImport";
 import SourceParameterDialog from "./SourceParameterDialog.vue";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
   state: import("../types").State;
   rules: ProxyRule[];
+  streamPage: boolean;
   openForm: (value: ConfigForm) => Promise<void>;
   preview?: { content: string; name: string; draft: boolean };
 }>();
 const emit = defineEmits<{
   close: [];
   saved: [];
-  raw: [source: string, line?: number];
+  raw: [source: string, stream: boolean, line?: number];
   copy: [value: string, label: string];
 }>();
 const dialog = ref<HTMLDialogElement>();
@@ -31,7 +33,8 @@ const source = ref(""),
   working = ref(false);
 const generated = ref<string[]>([]);
 const errorLine = ref<number>();
-let candidate: ReturnType<typeof importBlocks> | undefined;
+let candidate: ImportDraft | undefined;
+const scope = ref<"http" | "stream">(props.streamPage ? "stream" : "http");
 const blocks = computed(() => {
   try {
     return parseConfig(source.value);
@@ -39,12 +42,16 @@ const blocks = computed(() => {
     return [];
   }
 });
+const fragment = computed(() => configFragment(source.value, blocks.value, scope.value));
+function keepRaw(line?: number) {
+  emit("raw", fragment.value.text, fragment.value.scope === "stream", line);
+}
 const editingParameters = ref(false);
 const isLocation = computed(() => blocks.value.length === 1 && blocks.value[0].words[0] === "location");
 function acceptParameters(value: string) {
   editingParameters.value = false;
   source.value = value;
-  if (!isLocation.value) emit("raw", value);
+  if (!isLocation.value) keepRaw();
 }
 const migrationHints: [RegExp, string, string][] = [
   [/^http:\/\/unix:.*\/waf\.sock:/, "WAF 检测服务", "在目标机配置同等防护，确认 WAF 服务已启动，并将套接字路径指向该服务。"],
@@ -74,7 +81,7 @@ const dependencies = computed(() => {
     return { value, title: hint?.[1] ?? "配置引用", action: hint?.[2] ?? "在目标机核对该引用的定义和路径。" };
   });
 });
-watch([source, target], () => {
+watch([source, target, scope], () => {
   candidate = undefined;
   generated.value = [];
   error.value = "";
@@ -96,13 +103,10 @@ async function run(save: boolean) {
       });
       emit("saved");
     } else {
-      const existing = await matchSavedConfig(source.value, props.state);
-      if (existing) { await props.openForm(existing); return; }
-      candidate = importBlocks(source.value, target.value);
-      generated.value = await request<string[]>("/config-import/preview", {
-        method: "POST",
-        body: jsonBody(candidate),
-      });
+      const result = await previewImport(source.value, target.value, props.state, scope.value);
+      if ("form" in result) { await props.openForm(result.form); return; }
+      candidate = result.draft;
+      generated.value = result.generated;
     }
   } catch (e) {
     error.value = errorMessage(e);
@@ -156,6 +160,12 @@ async function run(save: boolean) {
         maxlength="1048576"
         placeholder="粘贴复制的配置、server 或 location 块"
       ></textarea>
+      <div v-if="blocks.length === 1 && externalPool(blocks[0])" class="import-target">
+        <label for="import-scope">服务组协议</label>
+        <AppSelect id="import-scope" v-model="scope" aria-label="服务组协议" :disabled="working">
+          <option value="http">HTTP</option><option value="stream">TCP/UDP</option>
+        </AppSelect>
+      </div>
       <div v-if="isLocation" class="import-target">
         <label for="import-target">目标代理</label
         ><AppSelect
@@ -191,7 +201,7 @@ async function run(save: boolean) {
         v-if="!isLocation"
         class="button secondary"
         :disabled="working || !source.trim()"
-        @click="emit('raw', source, errorLine)"
+        @click="keepRaw(errorLine)"
       >
         保留为自定义配置
       </button>
@@ -211,7 +221,7 @@ async function run(save: boolean) {
     </footer>
   </dialog>
   <SourceParameterDialog v-if="editingParameters" local
-    :entry="{file: {name: 'custom-import.conf', content: source}, title: '导入配置'}"
+    :entry="{file: {name: fragment.scope === 'stream' ? 'custom-import.stream' : 'custom-import.conf', content: source}, title: '导入配置'}"
     @close="editingParameters = false" @edited="acceptParameters" />
 </template>
 <style scoped>

@@ -138,6 +138,9 @@ export interface LocationSettings {
     | "status";
   upstream_path?: string;
   proxy_ssl_server_name?: boolean;
+  proxy_buffering?: boolean;
+  proxy_request_buffering?: boolean;
+  proxy_redirect?: {pool_id?: string; original_host?: string; disabled?: boolean};
   upstream_scheme: "http" | "https";
   upstream_pool_id: string;
   upstream_host: string;

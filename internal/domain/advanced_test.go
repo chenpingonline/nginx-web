@@ -97,3 +97,60 @@ func TestNormalizeLegacyStaticTryFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestDynamicRoutingAcceptsEmptyOutputs(t *testing.T) {
+	settings := DynamicRoutingSettings{
+		Maps:   []MapDefinition{{Name: "host", Source: "$host", Variable: "$backend", Entries: []KeyValue{{Key: "a.test"}}}},
+		Geos:   []GeoDefinition{{Name: "area", Variable: "$area", Entries: []KeyValue{{Key: "127.0.0.1"}}}},
+		Splits: []SplitDefinition{{Name: "variant", Source: "$request_id", Variable: "$variant", Entries: []KeyValue{{Key: "*"}}}},
+	}
+	if err := validateDynamicRouting(settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.Maps[0].Entries[0].Key = ""
+	if err := validateDynamicRouting(settings); err == nil {
+		t.Fatal("empty map key accepted")
+	}
+}
+
+func TestDynamicRoutingDefaultsPreservePartialSettings(t *testing.T) {
+	for _, existing := range []DynamicRoutingSettings{
+		{Maps: []MapDefinition{{Variable: "$backend"}}},
+		{Geos: []GeoDefinition{{Variable: "$area"}}, Splits: []SplitDefinition{{Variable: "$variant"}}},
+	} {
+		state := DefaultState()
+		state.Settings.Routing = existing
+		ApplyStateDefaults(&state)
+		got := state.Settings.Routing
+		if got.Maps == nil || got.Geos == nil || got.Splits == nil {
+			t.Fatal("defaults left a missing routing list")
+		}
+		if len(got.Maps) != len(existing.Maps) || len(got.Geos) != len(existing.Geos) || len(got.Splits) != len(existing.Splits) {
+			t.Fatal("defaults discarded existing routing blocks")
+		}
+	}
+}
+
+func TestProxyRedirectPoolBinding(t *testing.T) {
+	id := "aaaaaaaaaaaa"
+	pool := UpstreamPool{ID: id, Name: "Original", Protocol: "http"}
+	settings := LocationSettings{BackendType: "proxy", UpstreamPoolID: id, ProxyRedirect: &ProxyRedirect{PoolID: id, OriginalHost: "Old_Pool"}}
+	NormalizeLocationSettings(&settings)
+	if settings.ProxyRedirect == nil {
+		t.Fatal("lost original upstream")
+	}
+	pools := map[string]UpstreamPool{id: pool}
+	if err := ValidateLocationSettings(settings, pools); err != nil {
+		t.Fatal(err)
+	}
+	invalid := settings
+	invalid.ProxyRedirect = &ProxyRedirect{PoolID: id, OriginalHost: "old/path"}
+	if ValidateLocationSettings(invalid, pools) == nil {
+		t.Fatal("accepted redirect source containing a path")
+	}
+	settings.UpstreamPoolID = "bbbbbbbbbbbb"
+	NormalizeLocationSettings(&settings)
+	if settings.ProxyRedirect != nil {
+		t.Fatal("retained redirect from another pool")
+	}
+}

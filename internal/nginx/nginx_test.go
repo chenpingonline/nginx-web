@@ -397,3 +397,55 @@ func TestDormantLowPortDefaultsDoNotCreateListener(t *testing.T) {
 		}
 	}
 }
+
+func TestImportedPoolProxyRedirect(t *testing.T) {
+	manager := New(Paths{})
+	for _, tc := range []struct {
+		uri      string
+		disabled bool
+		want     string
+	}{
+		{"/backend/", false, `proxy_redirect "http://Old_Pool/backend/" "/api/";`},
+		{"", false, `proxy_redirect "http://Old_Pool/" "/";`},
+		{"", true, "proxy_redirect off;"},
+	} {
+		var output strings.Builder
+		loc := domain.LocationSettings{BackendType: "proxy", UpstreamScheme: "http", UpstreamPoolID: "abcdefabcdef", UpstreamPath: tc.uri, ProxyRedirect: &domain.ProxyRedirect{PoolID: "abcdefabcdef", OriginalHost: "Old_Pool", Disabled: tc.disabled}}
+		if err := manager.renderHTTPLocation(&output, domain.ProxyRule{}, "/api/", "prefix", loc, "", nil, 0); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), tc.want) {
+			t.Fatal(output.String())
+		}
+	}
+}
+
+func TestLocationBufferingOverridesRuleDefaults(t *testing.T) {
+	enabled, disabled := true, false
+	manager := New(Paths{})
+	for _, tc := range []struct {
+		streaming, websocket      bool
+		response, request         *bool
+		wantResponse, wantRequest string
+	}{
+		{false, false, nil, nil, "", ""},
+		{false, true, nil, nil, "off", ""},
+		{true, false, nil, nil, "off", "off"},
+		{true, true, &enabled, &enabled, "on", "on"},
+		{false, false, &disabled, &enabled, "off", "on"},
+		{false, false, nil, &disabled, "", "off"},
+	} {
+		loc := domain.LocationSettings{BackendType: "proxy", UpstreamScheme: "http", UpstreamHost: "127.0.0.1", UpstreamPort: 8005, ProxyBuffering: tc.response, ProxyRequestBuffering: tc.request}
+		var output strings.Builder
+		err := manager.renderHTTPLocation(&output, domain.ProxyRule{Streaming: tc.streaming, WebSocket: tc.websocket}, "/", "prefix", loc, "", nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, want := range map[string]string{"proxy_buffering": tc.wantResponse, "proxy_request_buffering": tc.wantRequest} {
+			count := strings.Count(output.String(), name+" ")
+			if want == "" && count != 0 || want != "" && (count != 1 || !strings.Contains(output.String(), name+" "+want+";")) {
+				t.Fatalf("expected %s=%q in %s", name, want, output.String())
+			}
+		}
+	}
+}
