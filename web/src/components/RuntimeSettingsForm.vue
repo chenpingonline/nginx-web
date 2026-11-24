@@ -85,20 +85,10 @@ function addSplit() {
 <template>
   <form class="settings-stack" @submit.prevent="submit">
     <article class="card settings-card">
-      <div class="settings-header">
-        <div class="rule-editor-tabs settings-tabs" role="tablist" aria-label="全局设置">
-          <button v-for="(tab, index) in tabs" :id="'settings-tab-' + index" :key="tab" type="button" role="tab"
-            :aria-selected="activeTab === tab" aria-controls="settings-panel" :tabindex="activeTab === tab ? 0 : -1"
-            @click="activeTab = tab" @keydown="moveTab($event, index)">{{ tab }}</button>
-        </div>
-        <div class="config-tools" role="group" aria-label="配置操作">
-          <button type="button" title="从 Nginx 配置导入" aria-label="从 Nginx 配置导入" @click="emit('importConfig')">
-            <PhSignIn :size="17" aria-hidden="true" /><span>导入配置</span>
-          </button>
-          <button type="button" title="复制配置" aria-label="复制配置" @click="emit('exportConfig', '', '全局设置')">
-            <PhCopySimple :size="17" aria-hidden="true" /><span>复制配置</span>
-          </button>
-        </div>
+      <div class="rule-editor-tabs settings-tabs" role="tablist" aria-label="全局设置">
+        <button v-for="(tab, index) in tabs" :id="'settings-tab-' + index" :key="tab" type="button" role="tab"
+          :aria-selected="activeTab === tab" aria-controls="settings-panel" :tabindex="activeTab === tab ? 0 : -1"
+          @click="activeTab = tab" @keydown="moveTab($event, index)">{{ tab }}</button>
       </div>
       <div id="settings-panel" role="tabpanel" :aria-labelledby="'settings-tab-' + tabs.indexOf(activeTab)">
     <section v-if="activeTab === '常用设置'">
@@ -391,6 +381,14 @@ function addSplit() {
         </a>
         <span class="settings-app-version">v{{ appVersion }}</span>
       </div>
+      <div class="config-tools" role="group" aria-label="配置操作">
+        <button type="button" title="从 Nginx 配置导入" aria-label="从 Nginx 配置导入" @click="emit('importConfig')">
+          <PhSignIn :size="17" aria-hidden="true" /><span>导入配置</span>
+        </button>
+        <button type="button" title="复制配置" aria-label="复制配置" @click="emit('exportConfig', '', '全局设置')">
+          <PhCopySimple :size="17" aria-hidden="true" /><span>复制配置</span>
+        </button>
+      </div>
       <span class="spacer"></span>
       <button class="button danger-ghost" type="button" :disabled="busy" @click="emit('clearCache')">清理代理缓存</button>
       <button class="button secondary" type="submit" data-action="test" :disabled="busy" title="校验当前填写的设置，不保存、不应用">校验配置</button>
@@ -413,16 +411,11 @@ function addSplit() {
 
 <style scoped>
 .settings-card { min-width: 0; }
-.settings-header { display: flex; align-items: center; border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0; background: var(--surface-solid); }
-.settings-tabs { flex: 1 1 auto; justify-content: flex-start; padding-inline: 16px; border-bottom: 0; border-radius: inherit; }
+.settings-tabs { justify-content: flex-start; padding-inline: 16px; border-radius: var(--radius) var(--radius) 0 0; }
 .config-tools { display: flex; flex: none; gap: 2px; padding-inline: 8px; border-inline-start: 1px solid var(--line); }
 .config-tools button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 32px; height: 32px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
 .config-tools button:hover, .config-tools button:focus-visible { color: var(--accent); background: var(--accent-soft); }
 .config-tools button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-@media (max-width: 1100px) {
-  .config-tools span { display: none; }
-  .config-tools { padding-inline: 4px; }
-}
 .settings-card .field > label:not(.checkbox-row) { justify-content: flex-end; text-align: right; color: var(--text); font-weight: 600; }
 .settings-card .checkbox-row { pointer-events: none; }
 .settings-card .checkbox-row > * { pointer-events: auto; cursor: pointer; }
