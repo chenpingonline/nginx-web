@@ -1,10 +1,10 @@
-import { parseConfig, newID } from "./nginxConfig";
+import { ConfigLineError, parseConfig, newID } from "./nginxConfig";
 import type { ConfigForm } from "./configForm";
 import type { State, StreamRule, UpstreamPool, UpstreamServer } from "./types";
 
 type Node = ReturnType<typeof parseConfig>[number];
 function unsupported(node: Node): never {
-  throw Error(`第 ${node.line} 行无法完整还原：${node.words.join(" ")}`);
+  throw new ConfigLineError(node.line, `无法完整还原：${node.words.join(" ")}`);
 }
 function endpoint(value: string, node: Node) {
   const addr = /^(?:\[([\da-f:]+)\]|([\w.-]+)):(\d+)$/i.exec(value);

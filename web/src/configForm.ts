@@ -35,8 +35,9 @@ export function configBody(text: string) {
 export async function matchSavedConfig(
   text: string,
   state: State,
+  firstLine = 1,
 ): Promise<ConfigForm | undefined> {
-  const nodes = parseConfig(text);
+  const nodes = parseConfig(text, firstLine);
   const candidates: { kind: ConfigForm["kind"]; id: string }[] = [];
   if (nodes.length === 1 && nodes[0].words[0] === "server") {
     const body = nodes[0].children ?? [];
@@ -111,7 +112,7 @@ export async function matchSavedConfig(
       (d) => d.words[0] === "set" && d.words[1] === "$fnproxy_rule_id",
     )
   ) {
-    const rule = importBlocks(text, "").rules?.[0];
+    const rule = importBlocks(text, "", firstLine).rules?.[0];
     if (rule) candidate = { kind: "rules", id: rule.id, value: rule };
   }
   if (!candidate) return;

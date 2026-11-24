@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { configBody, formPrefix, matchSavedConfig, type ConfigForm } from "../configForm";
-import { importBlocks, parseConfig } from "../nginxConfig";
+import { ConfigLineError, importBlocks, parseConfig } from "../nginxConfig";
 import { request, jsonBody, errorMessage } from "../api";
 import type { ProxyRule } from "../types";
 import AppSelect from "./AppSelect.vue";
@@ -15,7 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: [];
   saved: [];
-  raw: [source: string];
+  raw: [source: string, line?: number];
   copy: [value: string, label: string];
 }>();
 const dialog = ref<HTMLDialogElement>();
@@ -24,6 +24,7 @@ const source = ref(""),
   error = ref(""),
   working = ref(false);
 const generated = ref<string[]>([]);
+const errorLine = ref<number>();
 let candidate: ReturnType<typeof importBlocks> | undefined;
 const blocks = computed(() => {
   try {
@@ -65,11 +66,13 @@ watch([source, target], () => {
   candidate = undefined;
   generated.value = [];
   error.value = "";
+  errorLine.value = undefined;
 });
 onMounted(() => dialog.value?.showModal());
 async function run(save: boolean) {
   working.value = true;
   error.value = "";
+  errorLine.value = undefined;
   try {
     if (source.value.trimStart().startsWith(formPrefix)) {
       const form = await request<ConfigForm>("/config-form", { method: "POST", body: jsonBody({content: source.value}) });
@@ -91,6 +94,7 @@ async function run(save: boolean) {
     }
   } catch (e) {
     error.value = errorMessage(e);
+    errorLine.value = e instanceof ConfigLineError ? e.line : undefined;
     generated.value = [];
     candidate = undefined;
   } finally {
@@ -172,7 +176,7 @@ async function run(save: boolean) {
         v-if="!isLocation"
         class="button secondary"
         :disabled="working || !source.trim()"
-        @click="emit('raw', source)"
+        @click="emit('raw', source, errorLine)"
       >
         保留为自定义配置
       </button>

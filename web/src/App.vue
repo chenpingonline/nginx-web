@@ -59,7 +59,8 @@ import ConfigDialog from "./components/ConfigDialog.vue";
 import SourceParameterDialog from "./components/SourceParameterDialog.vue";
 import ProxyAddress from "./components/ProxyAddress.vue";
 import ConfigSources from "./components/ConfigSources.vue";
-import { replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
+import ConfigTextEditor from "./components/ConfigTextEditor.vue";
+import { ConfigLineError, replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -390,17 +391,25 @@ async function sourceSaved() {
   toast("自定义配置已保存为草稿，请校验后应用", "success");
   await loadCore(true);
 }
-async function editSource(entry:SourceEntry) {
+const configEditor = ref<InstanceType<typeof ConfigTextEditor>>();
+async function editSource(entry: SourceEntry, line = entry.line) {
   openCustomConfig(entry.file);
   await nextTick();
-  const editor=document.querySelector<HTMLTextAreaElement>("#custom-config-content");
-  if (editor) {
-    const start=entry.error ? entry.file.content.split("\n").slice(0,entry.line-1).reduce((offset,line)=>offset+line.length+1,0) : entry.start;
-    editor.focus();editor.setSelectionRange(start,start);
-    editor.scrollTop=(entry.line-1)*(parseFloat(getComputedStyle(editor).lineHeight)||18);
+  configEditor.value?.focusLine(line);
+}
+async function openSourceError(entry: SourceEntry, error: unknown) {
+  toast(errorMessage(error) + "。已打开源文件。", "error");
+  await editSource(entry, error instanceof ConfigLineError ? error.line : entry.line);
+}
+async function keepSource(source: string, line?: number) {
+  importing.value = false;
+  openCustomConfig();
+  customConfigForm.content = source;
+  if (line !== undefined) {
+    await nextTick();
+    configEditor.value?.focusLine(line);
   }
 }
-function keepSource(source:string) {importing.value=false;openCustomConfig();customConfigForm.content=source;}
 async function imported() {importing.value=false;await loadCore(true);toast("导入已保存为草稿","success");}
 const filteredRules = computed(() => {
   const rules = state.value?.rules ?? [],
@@ -763,8 +772,7 @@ async function openSourceRule(entry: SourceEntry) {
     annotatedHTTPSource.value = annotated;
     sourceReplacement.value = source;
   } catch (error) {
-    toast(errorMessage(error) + "。已打开源文件。", "error");
-    await editSource(entry);
+    await openSourceError(entry, error);
   } finally { busy.value = false; }
 }
 function openRule(rule: ProxyRule | null = null) {
@@ -1074,10 +1082,10 @@ async function editStreamSource(entry: SourceEntry) {
     const { raw,annotated } = formSourceBlock(entry);
     const form = annotated
       ? await request<ConfigForm>("/config-form", {method:"POST",body:jsonBody({content:raw})})
-      : await matchSavedConfig(raw,state.value!);
+      : await matchSavedConfig(raw,state.value!,entry.line);
     if (form?.kind !== "streams") throw Error("此配置无法完整还原为 TCP/UDP 规则");
     streamEditor.value?.show(form.value,entry);
-  } catch(e) { toast(errorMessage(e) + "。已打开源文件。","error"); await editSource(entry); }
+  } catch(e) { await openSourceError(entry, e); }
 }
 async function saveStreamRule(value: StreamRuleInput, id: string, entry?: SourceEntry) {
   let saved = false;
@@ -1732,7 +1740,7 @@ onBeforeUnmount(() => {
           <span class="field-help">必须以 custom- 开头，并以 .conf 或 .stream 结尾。</span>
         </div>
         <label for="custom-config-content">配置内容</label>
-        <textarea id="custom-config-content" v-model="customConfigForm.content" class="textarea custom-config-editor" required spellcheck="false" maxlength="1048576"></textarea>
+        <ConfigTextEditor ref="configEditor" v-model="customConfigForm.content" />
         <div class="notice warning">自定义指令不会经过结构化安全限制。应用前会执行 nginx -t；校验失败时不会替换当前运行配置。</div>
         <footer class="modal-footer"><button type="button" class="button ghost" :disabled="busy" @click="customConfigOpen = false">取消</button><button type="submit" class="button primary" :disabled="busy">{{ busy ? '保存中…' : '保存为草稿' }}</button></footer>
       </form>
@@ -1885,7 +1893,6 @@ onBeforeUnmount(() => {
 .custom-config-modal { width: min(960px, 100%); }
 .custom-config-form { display: grid; gap: 10px; }
 .custom-config-form > label { font-weight: 650; }
-.custom-config-editor { min-height: min(52vh, 520px); resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.55; tab-size: 4; }
 .custom-config-form .modal-footer { padding: 8px 0 0; }
 .admin-logout { width: 100%; justify-content: space-between; margin-bottom: 8px; }
 .admin-logout span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }

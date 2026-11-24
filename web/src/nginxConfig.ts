@@ -9,13 +9,20 @@ interface Directive {
   start: number;
   line: number;
 }
+export class ConfigLineError extends Error {
+  readonly line: number;
+  constructor(line: number, reason: string) {
+    super(`第 ${line} 行 · ${reason}`);
+    this.line = line;
+  }
+}
 function fail(line: number, reason: string): never {
-  throw new Error(`第 ${line} 行 · ${reason}`);
+  throw new ConfigLineError(line, reason);
 }
 
 // Keep file offsets for opening the original block. Only unquoted delimiters
 // end directives; variable braces, escapes and comments are part of the lexer.
-export function parseConfig(source: string): Directive[] {
+export function parseConfig(source: string, firstLine = 1): Directive[] {
   if (source.length > 1048576) throw new Error("配置不能超过 1 MB");
   const root: Directive[] = [],
     stack: Directive[][] = [root];
@@ -24,9 +31,9 @@ export function parseConfig(source: string): Directive[] {
     word = "",
     quote = "",
     active = false;
-  let line = 1,
+  let line = firstLine,
     start = 0,
-    startLine = 1,
+    startLine = firstLine,
     variable = false;
   let argsStart = 0, argsEnd = 0;
   function finish(end: number) {
@@ -168,7 +175,7 @@ export function sourceEntries(files: CustomConfig[]): SourceEntry[] {
     } catch (e) {
       entries.push({
         file,
-        line: Number(/第 (\d+) 行/.exec(String(e))?.[1] || 1),
+        line: e instanceof ConfigLineError ? e.line : 1,
         start: 0,
         title: file.name,
         entrances: [], targets: [], listeners: [], routes: [],
@@ -432,8 +439,8 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     settings.proxy_ssl_server_name = false;
   return { id: newID(), name: path, path, match, enabled: true, settings };
 }
-export function importBlocks(source: string, target: string) {
-  const blocks = parseConfig(source);
+export function importBlocks(source: string, target: string, firstLine = 1) {
+  const blocks = parseConfig(source, firstLine);
   if (!blocks.length) throw new Error("请输入 server 或 location 配置块");
   if (blocks.length === 1 && blocks[0].words[0] === "location") {
     if (!target) throw new Error("请选择目标代理");
@@ -573,11 +580,11 @@ export function updateSourceBlock(source: ReturnType<typeof sourceBlock>["source
 
 export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types").ProxyRule[]) {
   const { raw, source, nodes } = sourceBlock(entry);
-  if (raw.includes("#")) throw new Error("配置块含注释或特殊字符，请编辑源文件以保留原文");
+  if (raw.includes("#")) fail(entry.line + raw.slice(0, raw.indexOf("#")).split("\n").length - 1, "配置块含注释或特殊字符，请编辑源文件以保留原文");
   const args = (name: string) => nodes.find(n => n.words[0] === name)?.words.slice(1) ?? [];
   const originalID = nodes.find(n => n.words[0] === "set" && n.words[1] === "$fnproxy_rule_id")?.words[2];
   if (!originalID) {
-    const candidate = importBlocks(raw, "").rules?.[0];
+    const candidate = importBlocks(raw, "", entry.line).rules?.[0];
     if (!candidate) throw new Error("无法还原为代理规则");
     return { source, raw, rule: candidate, generated: false };
   }
@@ -585,9 +592,9 @@ export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types")
   // Generated static sites carry their root and proxy settings in each location.
   if (nodes.some(n => n.words[0] === "location" && n.children?.some(d => d.words[0] === "root"))) {
     const offset = entry.start!;
-    const withoutTracking = raw.slice(0, tracking.start - offset) + raw.slice(tracking.end - offset);
+    const withoutTracking = raw.slice(0, tracking.start - offset) + raw.slice(tracking.start - offset, tracking.end - offset).replace(/[^\n]/g, " ") + raw.slice(tracking.end - offset);
     try {
-      const candidate = importBlocks(withoutTracking, "").rules?.[0];
+      const candidate = importBlocks(withoutTracking, "", entry.line).rules?.[0];
       if (candidate) return { source, raw, rule: candidate, generated: true };
     } catch {
       // TLS and other managed directives can still be restored from the original rule below.

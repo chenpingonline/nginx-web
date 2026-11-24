@@ -172,3 +172,20 @@ test("plain HTTP configuration restores advanced location handlers and hostname 
     assert.equal(rule.root_location.backend_type, backend);
   }
 });
+
+test("conversion errors refer to the complete file, including preceding server blocks", async () => {
+  const { sourceRuleCandidate, ConfigLineError } = await import("../src/nginxConfig.ts");
+  for (const newline of ["\n", "\r\n"]) {
+    const lines = Array(40).fill("");
+    lines[0] = "# 中文 🚀";
+    lines[2] = "server { listen 8081; } server { listen 8082; }";
+    lines[20] = "server { listen 8083; server_name test.local; location / { return 404; }";
+    lines[33] = "location /app/ {";
+    lines[34] = "    proxy_pass http://127.0.0.1:9000/app/;";
+    lines[35] = "} }";
+    const entries = sourceEntries([{ name: "custom-test.conf", content: lines.join(newline) }]);
+    assert.equal(entries[2].line, 21);
+    assert.throws(() => sourceRuleCandidate(entries[2], []),
+      error => error instanceof ConfigLineError && error.line === 35 && error.message.includes("第 35 行"));
+  }
+});
