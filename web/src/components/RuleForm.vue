@@ -349,29 +349,27 @@ async function addLocation() {
     <RuleEditorTabs v-model="activeTab" prefix="http" :tabs="editorTabs" />
     <div v-show="activeTab === 'basic'" id="http-panel-basic" class="rule-tab-panel form-grid rule-form-grid" role="tabpanel" aria-labelledby="http-tab-basic" data-editor-tab="basic">
     <div class="rule-basics-row">
-    <div class="field">
-      <label for="rule-name">名称</label
-      ><input
-        :readonly="!!sourceFile"
-        id="rule-name"
-        v-model.trim="form.name"
-        class="input"
-        required
-        maxlength="80"
-        autofocus
-      />
-    </div>
-    <label v-if="!sourceFile" class="checkbox-row rule-enabled" title="启用或停用此规则">
-      <input v-model="form.enabled" type="checkbox" aria-label="启用此规则" />启用
-    </label>
-    </div>
-    <div class="field full">
-      <label for="rule-group">所属分组</label>
-      <input v-if="sourceFile" id="rule-group" class="input" value="自定义配置" readonly />
-      <AppSelect v-else id="rule-group" v-model="ruleGroup" class="select">
-        <option value="">未分组</option>
-        <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
-      </AppSelect>
+      <div class="field">
+        <label for="rule-name">名称</label>
+        <output v-if="sourceFile" id="rule-name">{{ form.name }}</output>
+        <input v-else id="rule-name" v-model.trim="form.name" class="input" required maxlength="80" autofocus />
+      </div>
+      <div class="field rule-group-field">
+        <template v-if="sourceFile">
+          <label for="rule-source-file">来源文件</label>
+          <output id="rule-source-file">{{ sourceFile }}</output>
+        </template>
+        <template v-else>
+          <label for="rule-group">所属分组</label>
+          <AppSelect id="rule-group" v-model="ruleGroup" class="select">
+            <option value="">未分组</option>
+            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+          </AppSelect>
+        </template>
+      </div>
+      <label v-if="!sourceFile" class="checkbox-row rule-enabled" title="启用或停用此规则">
+        <input v-model="form.enabled" type="checkbox" aria-label="启用此规则" />启用
+      </label>
     </div>
       <div v-if="selectedGroup" class="field-help group-inheritance full">
         <span>继承分组设置（取消勾选可自定义）：</span>
@@ -695,12 +693,18 @@ async function addLocation() {
 .path-summary span { color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
 .rule-enabled { align-self: center; white-space: nowrap; }
 .field-label-with-help { gap: 6px; width: fit-content; }
-#proxy-rule-form .rule-basics-row { grid-column: 1 / -1; width: min(100%, 860px); justify-self: center; display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-inline: 12px 0; align-items: start; }
-#proxy-rule-form .rule-basics-row > .field { grid-template-columns: auto minmax(0, 1fr); column-gap: 14px; align-items: center; }
-.rule-form-grid .rule-basics-row > .field > label:first-child { font-size: 15px; font-weight: 620; white-space: nowrap; }
-.rule-form-grid .rule-basics-row #rule-name { height: 30px; min-height: 30px; }
-.rule-form-grid .rule-basics-row #rule-name { width: 100%; }
-@media (max-width: 760px) { #proxy-rule-form .rule-basics-row > .field { align-items: stretch; gap: 4px; } .rule-basics-row { grid-template-columns: minmax(0, 1fr); gap: 12px; } }
+#proxy-rule-form .rule-basics-row { grid-column: 1 / -1; width: min(100%, 780px); justify-self: center; display: grid; grid-template-columns: minmax(0, 372px) minmax(0, 274px); justify-content: start; align-items: center; gap: 8px 36px; }
+#proxy-rule-form .rule-basics-row > .field { display: grid; grid-template-columns: 104px minmax(0, 1fr); column-gap: 8px; align-items: center; }
+#proxy-rule-form .rule-basics-row > .field > label { justify-content: flex-end; color: var(--text); font-weight: 600; }
+#proxy-rule-form .rule-basics-row > .rule-group-field { grid-template-columns: max-content minmax(0, 1fr); }
+#proxy-rule-form .rule-enabled { justify-self: start; margin-left: 112px; }
+#proxy-rule-form #rule-group { width: min(100%, 210px); }
+.rule-basics-row output { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+@media (max-width: 760px) {
+  #proxy-rule-form .rule-basics-row { grid-template-columns: minmax(0, 1fr); }
+  #proxy-rule-form .rule-basics-row > .field, #proxy-rule-form .rule-basics-row > .rule-group-field { grid-template-columns: 5em minmax(0, 260px); }
+  #proxy-rule-form .rule-enabled { margin-left: calc(5em + 8px); }
+}
 
 .rule-settings-panel {
   grid-column: 1 / -1;

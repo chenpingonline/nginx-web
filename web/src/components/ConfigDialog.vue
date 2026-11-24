@@ -19,6 +19,11 @@ const emit = defineEmits<{
   copy: [value: string, label: string];
 }>();
 const dialog = ref<HTMLDialogElement>();
+const previewBody = computed(() => configBody(props.preview?.content ?? ""));
+const formHeader = computed(() => {
+  const content = props.preview?.content ?? "";
+  return content.slice(0, content.length - previewBody.value.length);
+});
 const source = ref(""),
   target = ref(""),
   error = ref(""),
@@ -113,12 +118,13 @@ async function run(save: boolean) {
       <h2 id="config-dialog-title">{{ preview ? (preview.draft ? "草稿配置" : "规则配置") + " · " + preview.name : "从 Nginx 配置导入" }}</h2>
       <div v-if="preview" class="preview-actions">
         <button class="button ghost" @click="emit('close')">关闭</button>
-        <button class="button primary" @click="emit('copy', preview.content, 'Nginx 配置')">复制配置</button>
+        <button v-if="formHeader" class="button secondary" @click="emit('copy', preview.content, '可导入配置')">复制可导入配置</button>
+        <button class="button primary" autofocus @click="emit('copy', previewBody, 'Nginx 配置')">复制 Nginx 配置</button>
       </div>
     </header>
     <template v-if="preview">
-      <pre>{{ configBody(preview.content) }}</pre>
-      <details v-if="preview.content.startsWith(formPrefix)"><summary>复制时包含的表单数据</summary><pre>{{ preview.content.slice(0, preview.content.indexOf(configBody(preview.content))) }}</pre></details>
+      <pre>{{ previewBody }}</pre>
+      <details v-if="formHeader"><summary>可导入配置附带的表单数据</summary><pre>{{ formHeader }}</pre></details>
       <details v-if="dependencies.length">
         <summary>迁移时需要的依赖（{{ dependencies.length }}）</summary>
         <p>仅在把这段配置复制到另一台 Nginx 时逐项核对。准备好依赖后，运行 <code>nginx -t</code> 校验，再重载并测试转发。</p>
@@ -219,7 +225,7 @@ async function run(save: boolean) {
   flex-wrap: wrap;
   margin-bottom: 14px;
 }
-.preview-actions { display: flex; gap: 8px; margin-inline-start: auto; }
+.preview-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-inline-start: auto; }
 h2 {
   overflow-wrap: anywhere;
   margin: 0;
