@@ -96,6 +96,7 @@ type SidebarIconName =
   | "stream"
   | "upstreams"
   | "auth"
+  | "waf"
   | "rate-limit"
   | "certificate"
   | "logs"
@@ -143,7 +144,7 @@ const pages: { id: Page; icon: SidebarIconName; label: string; subtitle: string;
     label: "SSL/TLS 证书",
     subtitle: "管理证书导入、ACME 申请与自动续期",
   },
-  { id: "waf", icon: "certificate", label: "WAF 防火墙", subtitle: "管理站点防护实例与命中日志" },
+  { id: "waf", icon: "waf", label: "WAF 防火墙", subtitle: "管理站点防护实例与命中日志" },
   {
     id: "gateway",
     icon: "http",

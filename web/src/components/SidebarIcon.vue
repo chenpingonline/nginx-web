@@ -6,6 +6,7 @@ defineProps<{
     | "stream"
     | "upstreams"
     | "auth"
+    | "waf"
     | "rate-limit"
     | "certificate"
     | "logs"
@@ -71,10 +72,14 @@ defineProps<{
       <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" />
     </g>
     <g v-else-if="name === 'rate-limit'">
-      <path d="M3.5 18a8.5 8.5 0 1 1 17 0H3.5Z" />
-      <path d="m12 12 4.6-4.6" />
-      <circle cx="12" cy="12" r="1.6" />
-      <path d="M6.2 15.5h.1M17.7 15.5h.1M8 9.2h.1M12 7.5h.1" />
+      <path d="M5.6 19a9 9 0 1 1 12.8 0" />
+      <path d="M12 5.5V7M5.5 12H7M17 12h1.5M12 14l3.5-5" />
+      <circle cx="12" cy="14" r="1.35" fill="currentColor" stroke="none" />
+    </g>
+
+    <g v-else-if="name === 'waf'">
+      <path d="M12 2.8c2.7 1.9 5.4 2.8 8.2 3.2v5.5c0 4.6-3.2 8-8.2 10-5-2-8.2-5.4-8.2-10V6c2.8-.4 5.5-1.3 8.2-3.2Z" />
+      <path d="m8.5 12 2.4 2.4 4.7-4.9" />
     </g>
 
     <g v-else-if="name === 'certificate'">

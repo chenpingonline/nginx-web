@@ -341,7 +341,9 @@ async function addLocation() {
     settings: defaultLocation(),
   });
   await nextTick();
-  document.getElementById(`location-${id}`)?.closest(".rule-tab-panel")?.scrollTo({ top: 0, behavior: "smooth" });
+  const card = document.getElementById(`location-${id}`);
+  if (card instanceof HTMLDetailsElement) card.open = true;
+  card?.closest(".rule-tab-panel")?.scrollTo({ top: 0, behavior: "smooth" });
 }
 </script>
 <template>
@@ -526,8 +528,12 @@ async function addLocation() {
       v-if="form.locations.length === 0"
       class="empty-inline full section-content"
     >尚未添加自定义路径，所有请求使用默认路径 /。</div>
-    <div v-for="(location, index) in form.locations" :id="`location-${location.id}`" :key="location.id" class="location-card full section-content">
-      <div class="path-summary"><strong>{{ location.path || "未填写路径" }}</strong><span>{{ locationSummary(location.settings) }}</span></div>
+    <details v-for="(location, index) in form.locations" :id="`location-${location.id}`" :key="location.id" class="location-card full section-content">
+      <summary class="path-summary">
+        <strong>{{ location.path || "未填写路径" }}</strong>
+        <span>{{ locationSummary(location.settings) }}</span>
+        <small v-if="!location.enabled">已停用</small>
+      </summary>
       <div class="location-head">
         <input v-model.trim="location.name" class="input" placeholder="名称" required maxlength="80" />
         <AppSelect v-model="location.match" @update:model-value="value => { if (value === 'regex') location.settings.upstream_path = ''; }" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="regex">正则</option></AppSelect>
@@ -536,7 +542,7 @@ async function addLocation() {
         <button type="button" class="button danger compact" @click="form.locations.splice(index, 1)">删除</button>
       </div>
       <LocationSettingsEditor :model="location.settings" :regex="location.match === 'regex'" :upstream-pools="upstreamPools" :rule-auth-enabled="form.authentication.enabled" />
-    </div>
+    </details>
     </section>
     </div>
     <div v-show="activeTab === 'security'" id="http-panel-security" class="rule-tab-panel form-grid rule-form-grid" role="tabpanel" aria-labelledby="http-tab-security" data-editor-tab="security">
@@ -688,9 +694,14 @@ async function addLocation() {
 .rule-modal .rule-form-grid .body-limit-control .input { width: 100%; }
 .rule-modal .rule-form-grid .body-limit-control .input.has-unlimited-hint { padding-right: 105px; }
 .body-limit-hint { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 12px; pointer-events: none; }
-.path-summary { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 2px 0 12px; align-items: baseline; }
+.path-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: -9px; padding: 9px 12px; min-height: 38px; border-radius: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.path-summary::-webkit-details-marker { display: none; }
+.path-summary::before { content: ""; width: 6px; height: 6px; flex: none; border: solid var(--text-muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
+.location-card[open] > .path-summary::before { transform: rotate(45deg); }
+.location-card[open] > .path-summary { margin-bottom: 4px; }
+.path-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .path-summary strong { color: var(--accent); }
-.path-summary span { color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
+.path-summary span, .path-summary small { color: var(--text-muted); font-size: 13px; }
 .rule-enabled { align-self: center; white-space: nowrap; }
 .field-label-with-help { gap: 6px; width: fit-content; }
 #proxy-rule-form .rule-basics-row { grid-column: 1 / -1; width: min(100%, 780px); justify-self: center; display: grid; grid-template-columns: minmax(0, 372px) minmax(0, 274px); justify-content: start; align-items: center; gap: 8px 36px; }
@@ -726,6 +737,8 @@ async function addLocation() {
 .group-inheritance .checkbox-row { font-size: 14px; font-weight: 400; }
 #proxy-rule-form .body-limit-field { grid-template-columns: max-content minmax(0, 1fr); }
 .body-limit-field > label:first-child { white-space: nowrap; }
+#http-panel-paths { grid-auto-rows: max-content; }
+#http-panel-paths > .section-actions { padding-block: 5px; }
 .add-location-button {
   min-height: 34px;
   padding-inline: 12px;

@@ -7,6 +7,7 @@ import RuleStatusSwitch from "./RuleStatusSwitch.vue";
 import { computed, reactive, ref, toRaw, watch } from "vue";
 import {
   PhArrowClockwise,
+  PhFileCode,
   PhShareNetwork,
   PhPlusCircle,
   PhX,
@@ -234,7 +235,9 @@ defineExpose({ show, close: () => { open.value = false; } });
             </td>
             <td>
               <div class="table-actions">
-                <button class="button ghost small" @click="emit('preview',rule)">复制 Nginx 配置</button>
+                <button type="button" class="icon-button" aria-label="查看配置" title="查看配置" aria-haspopup="dialog" @click="emit('preview', rule)">
+                  <PhFileCode :size="18" aria-hidden="true" />
+                </button>
                 <button class="button ghost small" @click="show(rule)">
                   编辑</button
                 ><button
@@ -309,7 +312,7 @@ defineExpose({ show, close: () => { open.value = false; } });
           </section>
           <div class="form-section"><span>转发服务</span><small>选择连接需要转发的位置</small></div>
           <section class="stream-settings-panel" aria-label="转发服务">
-          <div class="field full stream-pool-field">
+          <div class="field stream-pool-field">
             <label>服务组</label
             ><AppSelect v-model="form.upstream_pool_id" class="select">
               <option value="">单个目标</option>
@@ -538,7 +541,7 @@ defineExpose({ show, close: () => { open.value = false; } });
 .stream-proxy-field > label:first-child { white-space: nowrap; }
 .stream-proxy-options { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 24px; }
 .stream-proxy-options .checkbox-row { white-space: nowrap; }
-#stream-rule-form .stream-pool-field { grid-template-columns: 112px minmax(0, 250px); column-gap: 10px; }
+.stream-pool-field + .field { grid-column-start: 1; }
 .stream-pool-field > label:first-child { white-space: nowrap; }
 .stream-form .field > label:first-child { min-height: var(--control-height); font-size: var(--control-font-size); font-weight: 500; }
 .stream-form .input, .stream-form .select { height: var(--control-height); min-height: var(--control-height); padding-inline: 10px; border-radius: var(--control-radius); font-size: var(--control-font-size); }
@@ -555,8 +558,7 @@ defineExpose({ show, close: () => { open.value = false; } });
   .stream-basics, .stream-settings-panel { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .stream-settings-panel { padding: 16px 12px; }
   .stream-form > .form-section { flex-wrap: wrap; gap: 8px; }
-  #stream-rule-form .field, #stream-rule-form .stream-pool-field, #stream-rule-form .stream-proxy-field { grid-template-columns: minmax(0, 1fr); }
-  .stream-pool-field .select { width: min(100%, 250px); }
+  #stream-rule-form .field, #stream-rule-form .stream-proxy-field { grid-template-columns: minmax(0, 1fr); }
   .stream-form .field > .checkbox-row { grid-column: 1; }
   .stream-connection-limit-label { align-self: flex-start; }
 }
