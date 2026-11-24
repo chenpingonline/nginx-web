@@ -1224,6 +1224,10 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 	switch match {
 	case "exact":
 		prefix = "= "
+	case "priority_prefix":
+		prefix = "^~ "
+	case "regex_i":
+		prefix = "~* "
 	case "regex":
 		prefix = "~ "
 	}

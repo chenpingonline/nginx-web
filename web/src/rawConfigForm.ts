@@ -1,4 +1,4 @@
-import { ConfigLineError, parseConfig, newID } from "./nginxConfig";
+import { ConfigLineError, parseConfig, newID, importBlocks } from "./nginxConfig";
 import type { ConfigForm } from "./configForm";
 import type { State, StreamRule, UpstreamPool, UpstreamServer } from "./types";
 
@@ -262,4 +262,34 @@ export function rawRouting(nodes: Node[], state: State): ConfigForm {
     } else unsupported(node);
   }
   return { kind: "settings", id: "", value: settings };
+}
+
+export function rawRatePolicy(nodes: Node[], state: State): ConfigForm {
+  const zone = nodes[0].words;
+  const id = zone[2]?.match(/^zone=fnproxy_req_([a-f0-9]{12,64}):1m$/)?.[1];
+  const rate = zone[3]?.match(/^rate=(\d+)r\/s$/)?.[1];
+  if (!id || !rate) unsupported(nodes[0]);
+  const existing = state.rate_limit_policies.find(policy => policy.id === id);
+  const settings = { enabled: true, requests_per_second: Number(rate), burst: 0,
+    no_delay: false, connections: 0, download_kbps: 0 };
+  for (const node of nodes.slice(1)) {
+    const [name, arg, value, flag] = node.words;
+    if (name === "limit_req") {
+      settings.burst = Number(value?.match(/^burst=(\d+)$/)?.[1]);
+      settings.no_delay = flag === "nodelay";
+    } else if (name === "limit_conn") settings.connections = Number(value);
+    else if (name === "limit_rate") settings.download_kbps = Number(arg?.match(/^(\d+)k$/)?.[1]);
+    else if (name !== "limit_conn_zone") unsupported(node);
+  }
+  return {kind: "rate-limits", id, value: { id, name: existing?.name ?? `限流 ${id}`, settings,
+    created_at: existing?.created_at ?? "0001-01-01T00:00:00Z", updated_at: existing?.updated_at ?? "0001-01-01T00:00:00Z" }};
+}
+
+// The group fragment uses the same listen/TLS grammar as an HTTP rule.
+export function rawGroup(text: string, firstLine: number): ConfigForm {
+  const rule = importBlocks("server { " + text + "\nserver_name group.test; location / { return 204; } }", "", firstLine).rules![0];
+  const id = rule.id;
+  return {kind: "rule-groups", id, value: {id, name: `监听 ${rule.listen_port}`,
+    listen_type: rule.listen_type as "ipv4" | "ipv6" | "dual", listen_port: rule.listen_port,
+    tls: rule.tls, http2: rule.http2, certificate_id: rule.certificate_id}};
 }

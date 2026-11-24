@@ -200,3 +200,40 @@ test("import literal proxy paths without adding or removing a slash", () => {
     assert.equal(rule.locations[0].settings.upstream_path, path);
   }
 });
+
+test("refuse lossy handler combinations and rewrites after return", () => {
+  const location = body => importBlocks("location /demo { " + body + " }", "target").location;
+  assert.throws(() => location("return 204;\nrewrite ^ /changed permanent;"), /第 2 行.*rewrite/);
+  assert.throws(() => location("return 204;\nproxy_pass http://127.0.0.1:8001;"), /第 2 行.*proxy_pass/);
+  const rule = location("rewrite ^ /changed permanent; return 204;");
+  assert.equal(rule.settings.rewrites[0].flag, "permanent");
+  assert.equal(rule.settings.return_code, 204);
+});
+
+test("import extended path matches, access lists, filters and DAV defaults", () => {
+  const config = `server { listen 19091; server_name matrix.test;
+    location / { mirror /copy; sub_filter old new; valid_referers server_names; return 204; }
+    location ^~ /files/ { root /srv/files; dav_methods PUT DELETE; allow 127.0.0.1; deny all; }
+    location ~* ^/assets { return 203; }
+    location @fallback { return 404; }
+  }`;
+  const rule = importBlocks(config, "").rules[0];
+  assert.deepEqual(rule.locations.map(l => l.match), ["priority_prefix", "regex_i", "named"]);
+  assert.deepEqual(rule.locations[0].settings.deny, ["all"]);
+  assert.equal(rule.locations[0].settings.dav.min_delete_depth, 0);
+  assert.equal(rule.root_location.sub_filter_once, true);
+  assert.equal(rule.root_location.mirror_request_body, true);
+  assert.throws(() => importBlocks(config.replace("return 404", "proxy_pass http://127.0.0.1:9000/path"), ""), /proxy_pass/);
+});
+
+test("Try Files accepts Nginx arguments and legacy commas, preserving quoted filenames", async () => {
+  const {parseTryFiles, formatTryFiles} = await import("../src/tryFiles.ts");
+  const spa = ["$uri", "$uri/", "/index.html"];
+  assert.deepEqual(parseTryFiles("$uri $uri/ /index.html"), spa);
+  assert.deepEqual(parseTryFiles("$uri, $uri/, /index.html"), spa);
+  assert.deepEqual(parseTryFiles(""), []);
+  const paths = ["/one two", "/a,b", "/a'b", '/a"b', "/a\\b", "=404"];
+  assert.deepEqual(parseTryFiles(formatTryFiles(paths)), paths);
+  assert.throws(() => parseTryFiles("$uri"), /回退/);
+  assert.throws(() => parseTryFiles('$uri "missing'), /引号/);
+});

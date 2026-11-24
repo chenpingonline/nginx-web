@@ -296,24 +296,22 @@ const gatewayParams: Record<string,string[]> = {
 function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.html"]) {
   const [, ...args] = node.words;
   const path = args[args.length - 1];
-  const match =
-    args.length === 1
-      ? "prefix"
-      : args[0] === "="
-        ? "exact"
-        : args[0] === "~"
-          ? "regex"
-          : undefined;
+  const modifiers = new Map([["=", "exact"], ["~", "regex"], ["~*", "regex_i"], ["^~", "priority_prefix"]]);
+  const match = args.length === 1
+    ? (path.startsWith("@") ? "named" : "prefix")
+    : modifiers.get(args[0]);
   if (
     !match ||
     !node.children ||
     args.length > 2 ||
     !path ||
-    /[\\$`]/.test(path)
+    (/[\\`]/.test(path) || path.includes("$") && !(match?.startsWith("regex") && path.indexOf("$") === path.length - 1))
   )
     unsupported(node);
   const settings: Partial<LocationSettings> = { backend_type: "proxy" };
-  const handler = node.children.find(d => ["proxy_pass","grpc_pass","fastcgi_pass","uwsgi_pass","scgi_pass","memcached_pass","stub_status","return"].includes(d.words[0]));
+  const handlers = node.children.filter(d => ["proxy_pass","grpc_pass","fastcgi_pass","uwsgi_pass","scgi_pass","memcached_pass","stub_status","return"].includes(d.words[0]));
+  if (handlers.length > 1) unsupported(handlers[1]);
+  const handler = handlers[0];
   const kind = handler?.words[0];
   const isProxy = kind === "proxy_pass";
   const localRoot = node.children.find(d => d.words[0] === "root" || d.words[0] === "alias");
@@ -339,6 +337,10 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     } else unsupported(handler);
   } else if (staticRoot) Object.assign(settings, {backend_type:"static", static_path:staticRoot, static_alias:localRoot?.words[0] === "alias", index_files:indexFiles});
   else unsupported(node);
+  const dav = node.children.find(d => d.words[0] === "dav_methods");
+  if (dav) settings.dav = {enabled: true, methods: dav.words.slice(1), create_full_put_path: false, min_delete_depth: 0};
+  const hasSubFilter = node.children.some(d => d.words[0] === "sub_filter");
+  if (hasSubFilter) settings.sub_filter_once = true;
   const params: string[] = [];
   const seen = new Set<string>();
   for (const d of node.children) {
@@ -353,6 +355,7 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
       (settings[name] ??= []).push(value); continue;
     }
     if (!d.children && name === "rewrite" && d.words.length === 4 && ["last","break","redirect","permanent"].includes(d.words[3])) {
+      if (kind === "return" && d.start > handler!.start) unsupported(d);
       (settings.rewrites ??= []).push({pattern:value,replacement:d.words[2],flag:d.words[3] as "last"|"break"|"redirect"|"permanent"}); continue;
     }
     if (name === "add_header" || name === "proxy_set_header") {
@@ -376,7 +379,18 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
       });
       continue;
     }
+    if (!d.children && name === "sub_filter" && d.words.length === 3) {
+      (settings.sub_filters ??= []).push({search: value, replacement: d.words[2]});
+      continue;
+    }
     if (d.children || seen.has(name)) unsupported(d);
+    if (d === dav || name === "valid_referers" || (name === "sub_filter_types" && hasSubFilter)) {
+      if (d.words.length < 2) unsupported(d);
+      if (name === "valid_referers") settings.valid_referers = d.words.slice(1);
+      if (name === "sub_filter_types") settings.sub_filter_types = d.words.slice(1);
+      seen.add(name);
+      continue;
+    }
     if (d === localRoot) {
       seen.add(name);
       continue;
@@ -395,6 +409,13 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     seen.add(name);
     if (name === "autoindex" && settings.backend_type === "static" && ["on","off"].includes(value)) settings.autoindex = value === "on";
     else if (name === "ssi" && ["on","off"].includes(value)) settings.ssi = value === "on";
+    else if (name === "sub_filter_once" && hasSubFilter && ["on","off"].includes(value)) settings.sub_filter_once = value === "on";
+    else if (settings.dav && name === "create_full_put_path" && ["on","off"].includes(value)) settings.dav.create_full_put_path = value === "on";
+    else if (settings.dav && name === "min_delete_depth" && /^\d+$/.test(value)) settings.dav.min_delete_depth = Number(value);
+    else if (name === "add_before_body") settings.addition_before = value;
+    else if (name === "add_after_body") settings.addition_after = value;
+    else if (name === "mirror") { settings.mirror = value; settings.mirror_request_body ??= true; }
+    else if (name === "mirror_request_body" && ["on","off"].includes(value) && node.children.some(child => child.words[0] === "mirror")) settings.mirror_request_body = value === "on";
     else if (name === "auth_request") settings.auth_request = value;
     else if (name === "auth_basic" && value !== "off") Object.assign(settings, {basic_auth:true,basic_auth_realm:value});
     else if (name === "auth_basic_user_file") settings.basic_auth_file = value;
@@ -408,7 +429,7 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
         );
       // Bare names may refer to an upstream group in a different file.
       if (
-        !target || (match === "regex" && !!target[4]) ||
+        !target || (["regex", "regex_i", "named"].includes(match) && !!target[4]) ||
         (!target[3] && !target[2].includes(".") && !target[2].startsWith("["))
       )
         unsupported(d);

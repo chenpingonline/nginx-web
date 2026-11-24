@@ -482,6 +482,14 @@ func NormalizeLocationSettings(settings *LocationSettings) {
 	}
 	if settings.TryFiles == nil {
 		settings.TryFiles = []string{}
+	} else if settings.BackendType == "static" && len(settings.TryFiles) == 1 {
+		// Older forms saved a whole space-separated directive as one invalid argument.
+		raw := settings.TryFiles[0]
+		if !strings.ContainsAny(raw, `"'\`) {
+			if fields := strings.Fields(raw); len(fields) > 1 {
+				settings.TryFiles = fields
+			}
+		}
 	}
 	if settings.Rewrites == nil {
 		settings.Rewrites = []RewriteRule{}
@@ -560,6 +568,8 @@ func NormalizeHTTPLocations(rule *ProxyRule) {
 		NormalizeLocationSettings(&location.Settings)
 	}
 }
+
+var namedLocationPattern = regexp.MustCompile(`^@[A-Za-z0-9_-]+$`)
 
 var upstreamPathPattern = regexp.MustCompile(`^/[A-Za-z0-9/._~+-]*$`)
 
@@ -643,7 +653,7 @@ func ValidateLocationSettings(settings LocationSettings, pools map[string]Upstre
 			}
 		}
 	}
-	if err := validateCIDRs(append(append([]string{}, settings.Allow...), settings.Deny...)); err != nil {
+	if err := validateAccessAddresses(append(append([]string{}, settings.Allow...), settings.Deny...)); err != nil {
 		return err
 	}
 	for _, header := range append(append([]HeaderSetting{}, settings.RequestHeaders...), settings.ResponseHeaders...) {
@@ -716,22 +726,34 @@ func ValidateHTTPLocations(rule ProxyRule, pools map[string]UpstreamPool) error 
 		if len([]rune(location.Name)) < 1 || len([]rune(location.Name)) > 80 {
 			return errors.New("Location 名称长度不正确")
 		}
-		if location.Match != "prefix" && location.Match != "exact" && location.Match != "regex" {
+		regex := location.Match == "regex" || location.Match == "regex_i"
+		named := location.Match == "named"
+		if named && (!namedLocationPattern.MatchString(location.Path) || strings.HasPrefix(location.Path, "@fnproxy_")) {
+			return errors.New("命名路径须使用 @名称，并避开应用保留前缀 @fnproxy_")
+		}
+		if location.Match != "prefix" && location.Match != "priority_prefix" && location.Match != "exact" && !regex && !named {
 			return errors.New("Location 匹配类型不支持")
 		}
-		if !strings.HasPrefix(location.Path, "/") && location.Match != "regex" {
+		if !strings.HasPrefix(location.Path, "/") && !regex && !named {
 			return errors.New("Location 路径必须以 / 开头")
 		}
 		if strings.ContainsAny(location.Path, "{};\r\n") {
 			return errors.New("Location 路径包含不允许的字符")
 		}
-		if location.Match == "regex" && location.Settings.BackendType == "proxy" && (location.Settings.UpstreamPath != "" || location.Settings.ProxyPassTrailingSlash) {
-			return errors.New("正则路径的 proxy_pass 不能带上游路径")
+		if (regex || named) && location.Settings.BackendType == "proxy" && (location.Settings.UpstreamPath != "" || location.Settings.ProxyPassTrailingSlash) {
+			return errors.New("正则或命名路径的 proxy_pass 不能带上游路径")
 		}
 		if location.Match == "exact" && strings.HasPrefix(location.Path, "/_nginx_web_internal_auth_") {
 			return errors.New("Location 路径使用了应用保留的内部认证地址")
 		}
-		key := location.Match + "\x00" + location.Path
+		match := location.Match
+		if match == "priority_prefix" {
+			match = "prefix"
+		}
+		if match == "prefix" && location.Path == "/" {
+			return errors.New("根路径已存在")
+		}
+		key := match + "\x00" + location.Path
 		if _, ok := seen[key]; ok {
 			return errors.New("存在重复 Location")
 		}
@@ -770,10 +792,10 @@ func ValidateStreamRule(rule StreamRule, certs map[string]CertificateMeta, pools
 	if err := validateCIDRs(rule.TrustedProxies); err != nil {
 		return err
 	}
-	if err := validateCIDRs(rule.Allow); err != nil {
+	if err := validateAccessAddresses(rule.Allow); err != nil {
 		return err
 	}
-	if err := validateCIDRs(rule.Deny); err != nil {
+	if err := validateAccessAddresses(rule.Deny); err != nil {
 		return err
 	}
 	if rule.TLSMode != "off" && rule.TLSMode != "terminate" && rule.TLSMode != "passthrough" {
@@ -902,12 +924,30 @@ func ValidateUpstreamPool(pool UpstreamPool) error {
 	return nil
 }
 
-func validateCIDRs(items []string) error {
+func validateAccessAddresses(items []string) error {
 	for _, item := range items {
-		value := strings.TrimSpace(item)
-		if net.ParseIP(value) != nil {
+		if item == "all" {
 			continue
 		}
+		if err := validateCIDR(item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCIDRs(items []string) error {
+	for _, item := range items {
+		if err := validateCIDR(item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCIDR(item string) error {
+	value := strings.TrimSpace(item)
+	if net.ParseIP(value) == nil {
 		if _, _, err := net.ParseCIDR(value); err != nil {
 			return fmt.Errorf("%q 不是有效 IP 或 CIDR", item)
 		}

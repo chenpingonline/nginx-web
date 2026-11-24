@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, useId } from "vue";
 import { TrimApp } from "@trimjs/web-app";
 import AppSelect from "./AppSelect.vue";
+import { parseTryFiles, formatTryFiles } from "../tryFiles";
 import HelpHint from "./HelpHint.vue";
 import type { LocationSettings, UpstreamPool } from "../types";
 const standalone = __STANDALONE__;
@@ -32,9 +33,20 @@ const list = (value: string) =>
     .split(/[\n,]+/)
     .map((item) => item.trim())
     .filter(Boolean);
-const setList = (key: "index_files" | "try_files" | "allow" | "deny" | "sub_filter_types" | "valid_referers", event: Event) => {
+const setList = (key: "index_files" | "allow" | "deny" | "sub_filter_types" | "valid_referers", event: Event) => {
   props.model[key] = list((event.target as HTMLInputElement).value);
 };
+function updateTryFiles(event: Event) {
+  const input = event.target as HTMLInputElement;
+  try {
+    const values = parseTryFiles(input.value);
+    input.setCustomValidity("");
+    if (event.type === "change") props.model.try_files = values;
+  } catch (error) {
+    input.setCustomValidity((error as Error).message);
+  }
+}
+const tryFilesId = useId();
 const setCacheBypass = (event: Event) => { props.model.cache.bypass = list((event.target as HTMLInputElement).value); };
 const addRewrite = () => props.model.rewrites.push({ pattern: "^/(.*)$", replacement: "/$1", flag: "last" });
 const addHeader = (kind: "request_headers" | "response_headers") =>
@@ -213,7 +225,7 @@ async function directoryAction(action: "select" | "authorize") {
       </div>
       <label class="checkbox-row field"><input v-model="model.autoindex" type="checkbox" /> 开启目录浏览</label>
       <div class="field"><label>首页文件</label><input class="input static-option-input" :value="model.index_files.join(', ')" @change="setList('index_files', $event)" /></div>
-      <div class="field"><label>Try Files</label><input class="input static-option-input" :value="model.try_files.join(', ')" placeholder="$uri, $uri/, /index.html" @change="setList('try_files', $event)" /></div>
+      <div class="field"><label :for="tryFilesId">Try Files</label><input :id="tryFilesId" class="input static-option-input" :value="formatTryFiles(model.try_files)" placeholder="$uri $uri/ /index.html" @input="updateTryFiles" @change="updateTryFiles" /></div>
 
     </template>
     <div v-if="['static','proxy'].includes(model.backend_type)" class="field"><label :for="timeoutId+'-expires'">缓存头 Expires</label><input :id="timeoutId+'-expires'" v-model.trim="model.expires" class="input" placeholder="7d / max / off" /></div>

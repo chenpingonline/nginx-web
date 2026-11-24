@@ -413,10 +413,13 @@ async function keepSource(source: string, line?: number) {
   }
 }
 async function imported() {importing.value=false;await loadCore(true);toast("导入已保存为草稿","success");}
+const ruleBackends = computed(() => {
+  const pools = new Map(state.value?.upstream_pools.map(pool => [pool.id, pool.name]));
+  return new Map((state.value?.rules ?? []).map(rule => [rule.id, ruleBackend(rule, pools)]));
+});
 const filteredRules = computed(() => {
   const rules = state.value?.rules ?? [],
     term = ruleSearch.value.trim().toLowerCase();
-  const poolNames = new Map((state.value?.upstream_pools ?? []).map(pool => [pool.id, pool.name]));
   return rules.filter(
     (rule) =>
       (selectedGroup.value === "all" || (rule.group_id || "") === selectedGroup.value) &&
@@ -427,8 +430,7 @@ const filteredRules = computed(() => {
         rule.name,
         ...(rule.domains ?? []).map(domain => `${domain}:${rule.listen_port}`),
         String(rule.listen_port),
-        `${rule.upstream_host}:${rule.upstream_port}`,
-        poolNames.get(rule.upstream_pool_id),
+        ruleBackends.value.get(rule.id)?.label,
       ]
         .join(" ")
         .toLowerCase()
@@ -469,8 +471,17 @@ function formatRuleEntry(rule: ProxyRule, domain = rule.domains[0]): string {
 function canOpenRuleEntry(domain?: string): boolean {
   return Boolean(domain && !domain.includes("*"));
 }
-function formatRuleBackend(rule: ProxyRule): string {
-  return `${rule.upstream_scheme}://${formatHost(rule.upstream_host)}:${rule.upstream_port}`;
+function ruleBackend(rule: ProxyRule, pools: Map<string, string>): {label: string; address?: string} {
+  const loc = rule.root_location;
+  if (rule.redirect_to_https) return {label: `HTTPS 跳转 · ${rule.redirect_https_port || 443}`};
+  if (loc.backend_type === "static") return {label: `静态文件 · ${loc.static_path}`};
+  if (loc.backend_type === "return") return {label: `返回 ${loc.return_code} ${loc.return_target || ""}`.trimEnd()};
+  if (loc.backend_type === "status") return {label: "Nginx 状态"};
+  if (loc.upstream_pool_id) return {label: pools.get(loc.upstream_pool_id) || "转发服务组"};
+  const target = `${formatHost(loc.upstream_host)}:${loc.upstream_port}`;
+  if (loc.backend_type !== "proxy") return {label: `${loc.backend_type.toUpperCase()} · ${target}`};
+  const address = `${loc.upstream_scheme}://${target}${loc.upstream_path || ""}`;
+  return {label: address, address};
 }
 async function copyText(value: string) {
   try {
@@ -1398,7 +1409,8 @@ onBeforeUnmount(() => {
                         <div v-if="!rule.domains.length" :class="{ 'unsupported-entry': rule.listen_port < minListenPort }" :title="rule.listen_port < minListenPort ? '当前版本不支持此监听端口' : undefined">{{ formatRuleEntry(rule) }}</div>
                       </td>
                       <td>
-                        <ProxyAddress :value="formatRuleBackend(rule)" @copy="copyProxyAddress" />
+                        <ProxyAddress v-if="ruleBackends.get(rule.id)?.address" :value="ruleBackends.get(rule.id)!.label" @copy="copyProxyAddress" />
+                        <span v-else>{{ ruleBackends.get(rule.id)?.label }}</span>
                       </td>
                       <td>
                         <div class="table-actions">

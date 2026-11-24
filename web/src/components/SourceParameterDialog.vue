@@ -7,8 +7,8 @@ import SourceParameterField from "./SourceParameterField.vue";
 
 import type { CustomConfig } from "../types";
 
-const props = defineProps<{ entry: { file: CustomConfig; title: string; start?: number } }>();
-const emit = defineEmits<{ close: []; saved: [] }>();
+const props = defineProps<{ entry: { file: CustomConfig; title: string; start?: number }; local?: boolean }>();
+const emit = defineEmits<{ close: []; saved: []; edited: [content: string] }>();
 const error = ref("");
 const groups = ref<ReturnType<typeof parameterGroups>>([]);
 try {
@@ -23,12 +23,13 @@ const saving = ref(false);
 onMounted(() => dialog.value?.showModal());
 
 async function save() {
-  if (saving.value || !changed.value) return;
+  if (saving.value || (!changed.value && !props.local)) return;
   saving.value = true;
   error.value = "";
   try {
     const file = props.entry.file;
     const content = editParameters(file.content, fields.value);
+    if (props.local) { emit("edited", content); return; }
     await request("/custom-configs/" + encodeURIComponent(file.name), {
       method: "PUT", body: jsonBody({ name: file.name, content, expected_content: file.content }),
     });
@@ -48,7 +49,7 @@ async function save() {
         <h2 id="source-param-title">编辑配置参数 · {{ entry.title }}</h2>
         <div class="actions">
           <button type="button" class="button ghost" :disabled="saving" @click="emit('close')">取消</button>
-          <button class="button primary" :disabled="saving || !changed">保存为草稿</button>
+          <button class="button primary" :disabled="saving || (!local && !changed)">{{ local ? "使用此配置" : "保存为草稿" }}</button>
         </div>
       </header>
       <section>

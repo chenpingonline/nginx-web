@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 )
@@ -72,5 +73,27 @@ func TestValidateStateRejectsUntrustedRealIPAndMissingPool(t *testing.T) {
 	state.Rules = []ProxyRule{rule}
 	if err := ValidateState(state); err == nil {
 		t.Fatal("expected missing pool validation error")
+	}
+}
+
+func TestAccessAllIsNotATrustedProxyNetwork(t *testing.T) {
+	if err := validateAccessAddresses([]string{"127.0.0.1", "10.0.0.0/8", "all"}); err != nil {
+		t.Fatal(err)
+	}
+	if validateAccessAddresses([]string{"any"}) == nil || validateCIDRs([]string{"all"}) == nil {
+		t.Fatal("only access rules accept the literal all")
+	}
+}
+
+func TestNormalizeLegacyStaticTryFiles(t *testing.T) {
+	for _, tc := range []struct{ input, want []string }{
+		{[]string{"$uri $uri/ /index.html"}, []string{"$uri", "$uri/", "/index.html"}},
+		{[]string{"/file with spaces", "=404"}, []string{"/file with spaces", "=404"}},
+	} {
+		loc := LocationSettings{BackendType: "static", TryFiles: tc.input}
+		NormalizeLocationSettings(&loc)
+		if !slices.Equal(loc.TryFiles, tc.want) {
+			t.Fatalf("got %q, want %q", loc.TryFiles, tc.want)
+		}
 	}
 }

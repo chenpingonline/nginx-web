@@ -4,6 +4,7 @@ import { configBody, formPrefix, matchSavedConfig, type ConfigForm } from "../co
 import { ConfigLineError, importBlocks, parseConfig } from "../nginxConfig";
 import { request, jsonBody, errorMessage } from "../api";
 import type { ProxyRule } from "../types";
+import SourceParameterDialog from "./SourceParameterDialog.vue";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
@@ -38,7 +39,13 @@ const blocks = computed(() => {
     return [];
   }
 });
-const isLocation = computed(() => blocks.value[0]?.words[0] === "location");
+const editingParameters = ref(false);
+const isLocation = computed(() => blocks.value.length === 1 && blocks.value[0].words[0] === "location");
+function acceptParameters(value: string) {
+  editingParameters.value = false;
+  source.value = value;
+  if (!isLocation.value) emit("raw", value);
+}
 const migrationHints: [RegExp, string, string][] = [
   [/^http:\/\/unix:.*\/waf\.sock:/, "WAF 检测服务", "在目标机配置同等防护，确认 WAF 服务已启动，并将套接字路径指向该服务。"],
   [/^http:\/\/unix:.*:\/internal\/basic-auth\//, "访问认证服务", "在目标机重建这条规则的认证策略，并将认证请求指向可用的认证服务。"],
@@ -178,6 +185,8 @@ async function run(save: boolean) {
       <button class="button ghost" :disabled="working" @click="emit('close')">
         关闭
       </button>
+      <button v-if="error && blocks.length && !source.trimStart().startsWith(formPrefix)" class="button secondary"
+        @click="editingParameters = true">按原文编辑参数</button>
       <button
         v-if="!isLocation"
         class="button secondary"
@@ -201,6 +210,9 @@ async function run(save: boolean) {
       </button>
     </footer>
   </dialog>
+  <SourceParameterDialog v-if="editingParameters" local
+    :entry="{file: {name: 'custom-import.conf', content: source}, title: '导入配置'}"
+    @close="editingParameters = false" @edited="acceptParameters" />
 </template>
 <style scoped>
 .config-dialog {

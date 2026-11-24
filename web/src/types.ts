@@ -186,7 +186,7 @@ export interface LocationRule {
   name: string;
   enabled: boolean;
   path: string;
-  match: "prefix" | "exact" | "regex";
+  match: "prefix" | "priority_prefix" | "exact" | "regex" | "regex_i" | "named";
   settings: LocationSettings;
 }
 export type ListenType = "ipv4" | "ipv6" | "dual";

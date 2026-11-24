@@ -536,12 +536,12 @@ async function addLocation() {
       </summary>
       <div class="location-head">
         <input v-model.trim="location.name" class="input" placeholder="名称" required maxlength="80" />
-        <AppSelect v-model="location.match" @update:model-value="value => { if (value === 'regex') location.settings.upstream_path = ''; }" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="regex">正则</option></AppSelect>
+        <AppSelect v-model="location.match" @update:model-value="value => { if (['regex', 'regex_i', 'named'].includes(String(value))) location.settings.upstream_path = ''; }" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="priority_prefix">优先前缀 (^~)</option><option value="regex">正则 (~)</option><option value="regex_i">正则忽略大小写 (~*)</option><option value="named">命名路径 (@)</option></AppSelect>
         <input v-model="location.path" class="input" placeholder="/api/" aria-label="自定义路径" required />
         <label class="checkbox-row"><input v-model="location.enabled" type="checkbox" />启用</label>
         <button type="button" class="button danger compact" @click="form.locations.splice(index, 1)">删除</button>
       </div>
-      <LocationSettingsEditor :model="location.settings" :regex="location.match === 'regex'" :upstream-pools="upstreamPools" :rule-auth-enabled="form.authentication.enabled" />
+      <LocationSettingsEditor :model="location.settings" :regex="['regex', 'regex_i', 'named'].includes(location.match)" :upstream-pools="upstreamPools" :rule-auth-enabled="form.authentication.enabled" />
     </details>
     </section>
     </div>

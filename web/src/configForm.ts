@@ -59,18 +59,52 @@ export async function matchSavedConfig(
     if (id && state.upstream_pools.some((p) => p.id === id))
       candidates.push({ kind: "upstreams", id });
   }
+  const first = nodes[0]?.words;
+  if (first?.[0] === "listen") {
+    const port = Number(first[1]?.split(":").pop());
+    for (const group of state.rule_groups ?? [])
+      if (group.listen_port === port) candidates.push({kind: "rule-groups", id: group.id});
+  } else if (first?.[0] === "limit_req_zone") {
+    const id = first[2]?.match(/^zone=fnproxy_req_([a-f0-9]+):1m$/)?.[1];
+    if (id && state.rate_limit_policies.some(policy => policy.id === id))
+      candidates.push({kind: "rate-limits", id});
+  } else if (first?.[0] === "proxy_pass") {
+    const id = first[1]?.match(/:\/internal\/basic-auth\/([a-f0-9]+)$/)?.[1];
+    if (id && state.auth_profiles.some(profile => profile.id === id))
+      candidates.push({kind: "auth-profiles", id});
+  } else if (first?.[0] === "location") {
+    const site = text.match(/^# server ([a-f0-9]+)\s*$/m)?.[1];
+    if (site) for (const waf of state.waf_instances ?? [])
+      if (waf.sites.includes(site)) candidates.push({kind: "waf", id: waf.id});
+  } else if (first?.[0] === "daemon") candidates.push({kind: "settings", id: ""});
+
   const signature = ruleDirectives(text);
+  let matched: string | undefined;
   for (const c of candidates) {
     const { content } = await request<{ content: string }>(
       `/config-form?kind=${c.kind}&id=${c.id}`,
     );
-    if (ruleDirectives(configBody(content)) !== signature) continue;
-    return request<ConfigForm>("/config-form", {
-      method: "POST",
-      body: JSON.stringify({ content }),
-    });
+    const body = configBody(content);
+    // Settings exports carry routing blocks in comments.
+    const same = c.kind === "settings" || c.kind === "waf"
+      ? body.trim().replaceAll("\r\n", "\n") === text.trim().replaceAll("\r\n", "\n")
+      : ruleDirectives(body) === signature;
+    if (!same) continue;
+    if (matched) throw Error("多条已保存的配置与原文一致，请复制含表单注释的配置以选择对应记录");
+    matched = content;
   }
-  const { rawPool, rawStream, rawRouting } = await import("./rawConfigForm");
+  if (matched) return request<ConfigForm>("/config-form", {
+    method: "POST", body: JSON.stringify({ content: matched }),
+  });
+  const { rawPool, rawStream, rawRouting, rawRatePolicy, rawGroup } = await import("./rawConfigForm");
+  if (first?.[0] === "limit_req_zone" || first?.[0] === "listen") {
+    const candidate = first[0] === "listen" ? rawGroup(text, firstLine) : rawRatePolicy(nodes, state);
+    const preview = await request<{ form: ConfigForm; content: string }>("/config-form/preview", {
+      method: "POST", body: JSON.stringify(candidate),
+    });
+    if (ruleDirectives(preview.content) !== signature) throw Error("表单生成的指令与原文不同");
+    return preview.form;
+  }
   if (
     nodes.length &&
     nodes.every((n) => ["map", "geo", "split_clients"].includes(n.words[0]))
