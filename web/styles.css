@@ -714,12 +714,6 @@ html[data-theme="dark"] { --scroll-thumb: #686b6e; }
 .proxy-entry { display: flex; align-items: center; gap: 5px; }
 .proxy-entry-url { white-space: nowrap; }
 .proxy-entry .proxy-entry-action { width: 28px; height: 28px; flex: 0 0 28px; text-decoration: none; }
-.rule-config-copy { position: relative; width: 28px; height: 28px; }
-.rule-config-copy:is(:hover, :focus-visible)::after {
-  content: attr(aria-label); position: absolute; z-index: 2; right: calc(100% + 6px); top: 50%;
-  transform: translateY(-50%); padding: 4px 8px; border-radius: 6px; white-space: nowrap;
-  background: var(--text); color: var(--surface); font-size: 12px; pointer-events: none;
-}
 .proxy-entry-action:disabled { opacity: .35; cursor: not-allowed; }
 
 .grouped-rule-card { margin-bottom: 16px; }

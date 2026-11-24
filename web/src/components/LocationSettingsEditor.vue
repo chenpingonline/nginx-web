@@ -80,7 +80,7 @@ const backendHelp = computed(() => ({
   status: "显示 Nginx 的活动连接和请求统计，请限制访问范围。",
 })[props.model.backend_type]);
 const pickingDirectory = ref(false);
-const trailingSlashId = useId();
+const upstreamPathId = useId();
 const staticAliasId = `static-alias-${useId()}`;
 const openingAuthorization = ref(false);
 const directoryError = ref("");
@@ -179,10 +179,9 @@ async function directoryAction(action: "select" | "authorize") {
       </template>
     </template>
 
-    <div v-if="model.backend_type === 'proxy' && !regex" class="checkbox-row field">
-      <input :id="trailingSlashId" v-model="model.proxy_pass_trailing_slash" type="checkbox" />
-      <label :for="trailingSlashId">转发地址末尾添加 /</label>
-      <HelpHint text="将匹配到的路径替换为 /。例如在 /files/ 下，/files/a.jpg 会转发为 /a.jpg。" />
+    <div v-if="model.backend_type === 'proxy' && !regex" class="field">
+      <label :for="upstreamPathId">上游路径</label>
+      <input :id="upstreamPathId" v-model="model.upstream_path" class="input" placeholder="留空保留原请求路径" />
     </div>
 
     <template v-if="model.backend_type === 'static'">

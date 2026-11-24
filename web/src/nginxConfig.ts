@@ -403,7 +403,7 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
     else if (name === "proxy_ssl_verify" && isProxy && value === "off") continue;
     else if (name === "proxy_pass") {
       const target =
-        /^(https?):\/\/(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?(\/?)$/.exec(
+        /^(https?):\/\/(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9.-]+)(?::(\d+))?(\/[a-zA-Z0-9/._~+\-]*)?$/.exec(
           value,
         );
       // Bare names may refer to an upstream group in a different file.
@@ -412,7 +412,7 @@ function convertLocation(node: Directive, staticRoot = "", indexFiles = ["index.
         (!target[3] && !target[2].includes(".") && !target[2].startsWith("["))
       )
         unsupported(d);
-      settings.proxy_pass_trailing_slash = !!target[4];
+      settings.upstream_path = target[4] ?? "";
       settings.upstream_scheme = target[1] as "http" | "https";
       settings.upstream_host = target[2].replace(/^\[|\]$/g, "");
       settings.upstream_port = Number(
@@ -607,7 +607,7 @@ export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types")
   const domains = args("server_name");
   const root = nodes.find(n => n.words[0] === "location" && n.words[1] === "/")?.children ?? [];
   const directive = (name: string) => root.find(n => n.words[0] === name)?.words[1];
-  const target = /^(https?):\/\/(\[[\da-f:]+\]|[\w.-]+):(\d+)(\/?)$/i.exec(directive("proxy_pass") || "");
+  const target = /^(https?):\/\/(\[[\da-f:]+\]|[\w.-]+):(\d+)(\/[a-zA-Z0-9/._~+\-]*)?$/i.exec(directive("proxy_pass") || "");
   const backend = target ? { upstream_scheme: target[1], upstream_host: target[2].replace(/^\[|\]$/g, ""), upstream_port: Number(target[3]), upstream_pool_id: "" } : {};
   const cert = args("ssl_certificate")[0]?.match(/\/([^/]+)\/fullchain\.pem$/)?.[1] ?? "";
   const rule = {
@@ -622,7 +622,7 @@ export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types")
     connect_timeout_seconds: parseInt(directive("proxy_connect_timeout") || "0", 10),
     read_timeout_seconds: parseInt(directive("proxy_read_timeout") || "0", 10),
     send_timeout_seconds: parseInt(directive("proxy_send_timeout") || "0", 10),
-    ...backend, root_location: { ...original?.root_location, ...backend, ...(target && { proxy_pass_trailing_slash: !!target[4] }) },
+    ...backend, root_location: { ...original?.root_location, ...backend, ...(target && { upstream_path: target[4] ?? "" }) },
   };
   return { source, raw, rule, generated: true };
 }

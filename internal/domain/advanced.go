@@ -200,11 +200,12 @@ type DAVSettings struct {
 }
 
 type LocationSettings struct {
-	ProxySSLServerName     *bool `json:"proxy_ssl_server_name,omitempty"`
-	ProxyPassTrailingSlash bool  `json:"proxy_pass_trailing_slash,omitempty"`
-	ConnectTimeoutSeconds  int   `json:"connect_timeout_seconds,omitempty"`
-	ReadTimeoutSeconds     int   `json:"read_timeout_seconds,omitempty"`
-	SendTimeoutSeconds     int   `json:"send_timeout_seconds,omitempty"`
+	ProxySSLServerName     *bool  `json:"proxy_ssl_server_name,omitempty"`
+	UpstreamPath           string `json:"upstream_path,omitempty"`
+	ProxyPassTrailingSlash bool   `json:"proxy_pass_trailing_slash,omitempty"`
+	ConnectTimeoutSeconds  int    `json:"connect_timeout_seconds,omitempty"`
+	ReadTimeoutSeconds     int    `json:"read_timeout_seconds,omitempty"`
+	SendTimeoutSeconds     int    `json:"send_timeout_seconds,omitempty"`
 
 	BackendType          string             `json:"backend_type"`
 	UpstreamScheme       string             `json:"upstream_scheme"`
@@ -459,6 +460,10 @@ func defaultLocationSettings() LocationSettings {
 }
 
 func NormalizeLocationSettings(settings *LocationSettings) {
+	if settings.ProxyPassTrailingSlash && settings.UpstreamPath == "" {
+		settings.UpstreamPath = "/"
+	}
+	settings.ProxyPassTrailingSlash = false
 	settings.BackendType = strings.ToLower(strings.TrimSpace(settings.BackendType))
 	settings.UpstreamScheme = strings.ToLower(strings.TrimSpace(settings.UpstreamScheme))
 	settings.UpstreamPoolID = strings.TrimSpace(settings.UpstreamPoolID)
@@ -556,7 +561,12 @@ func NormalizeHTTPLocations(rule *ProxyRule) {
 	}
 }
 
+var upstreamPathPattern = regexp.MustCompile(`^/[A-Za-z0-9/._~+-]*$`)
+
 func ValidateLocationSettings(settings LocationSettings, pools map[string]UpstreamPool) error {
+	if settings.UpstreamPath != "" && !upstreamPathPattern.MatchString(settings.UpstreamPath) {
+		return errors.New("上游路径须以 / 开头，仅支持固定路径")
+	}
 	if settings.ProxyHTTPVersion != "" && settings.ProxyHTTPVersion != "1.0" && settings.ProxyHTTPVersion != "1.1" {
 		return errors.New("代理 HTTP 版本只支持 1.0 或 1.1")
 	}
@@ -715,8 +725,8 @@ func ValidateHTTPLocations(rule ProxyRule, pools map[string]UpstreamPool) error 
 		if strings.ContainsAny(location.Path, "{};\r\n") {
 			return errors.New("Location 路径包含不允许的字符")
 		}
-		if location.Match == "regex" && location.Settings.BackendType == "proxy" && location.Settings.ProxyPassTrailingSlash {
-			return errors.New("正则路径的 proxy_pass 不能带结尾斜杠")
+		if location.Match == "regex" && location.Settings.BackendType == "proxy" && (location.Settings.UpstreamPath != "" || location.Settings.ProxyPassTrailingSlash) {
+			return errors.New("正则路径的 proxy_pass 不能带上游路径")
 		}
 		if location.Match == "exact" && strings.HasPrefix(location.Path, "/_nginx_web_internal_auth_") {
 			return errors.New("Location 路径使用了应用保留的内部认证地址")

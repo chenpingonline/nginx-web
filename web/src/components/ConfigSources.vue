@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { PhCaretDown, PhCaretRight, PhCopy } from "@phosphor-icons/vue";
+import { PhCaretDown, PhCaretRight, PhFileCode } from "@phosphor-icons/vue";
 import type { SourceEntry } from "../nginxConfig";
 
 import RuleStatusSwitch from "./RuleStatusSwitch.vue";
@@ -56,7 +56,7 @@ function toggle(entry: SourceEntry) {
               </td>
               <td>
                 <div class="table-actions">
-                  <button v-if="ruleEditor && !item.error" type="button" class="icon-button rule-config-copy" aria-label="复制 Nginx 配置" @click="$emit('preview', item)"><PhCopy :size="16" aria-hidden="true" /></button>
+                  <button v-if="ruleEditor && !item.error" type="button" class="icon-button" aria-label="查看配置" title="查看配置" aria-haspopup="dialog" @click="$emit('preview', item)"><PhFileCode :size="18" aria-hidden="true" /></button>
                   <button v-if="!ruleEditor && !item.error" type="button" class="button ghost small"
                     :aria-expanded="expanded.has(keyOf(item))" @click="toggle(item)">
                     <PhCaretDown v-if="expanded.has(keyOf(item))" aria-hidden="true" />

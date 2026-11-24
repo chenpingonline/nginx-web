@@ -21,6 +21,7 @@ import {
   PhArrowUp,
   PhArrowDown,
   PhCopy,
+  PhFileCode,
   PhCaretDown,
   PhCaretRight,
   PhArrowsLeftRight,
@@ -1400,8 +1401,8 @@ onBeforeUnmount(() => {
                       </td>
                       <td>
                         <div class="table-actions">
-                          <button type="button" class="icon-button rule-config-copy" aria-label="复制 Nginx 配置" @click="showConfig(rule.id, rule.name)">
-                            <PhCopy :size="16" aria-hidden="true" />
+                          <button type="button" class="icon-button" aria-label="查看配置" title="查看配置" aria-haspopup="dialog" @click="showConfig(rule.id, rule.name)">
+                            <PhFileCode :size="18" aria-hidden="true" />
                           </button>
                           <button
                             class="button ghost small"

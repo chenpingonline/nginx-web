@@ -149,3 +149,16 @@ func TestPermissionModeAllowsLowUpstreamPorts(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyProxyPathCanBeCleared(t *testing.T) {
+	location := LocationSettings{BackendType: "proxy", ProxyPassTrailingSlash: true}
+	NormalizeLocationSettings(&location)
+	if location.UpstreamPath != "/" || location.ProxyPassTrailingSlash {
+		t.Fatal("legacy trailing slash did not migrate to an explicit path")
+	}
+	location.UpstreamPath = ""
+	NormalizeLocationSettings(&location)
+	if location.UpstreamPath != "" {
+		t.Fatal("cleared path was restored")
+	}
+}

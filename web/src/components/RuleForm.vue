@@ -111,7 +111,7 @@ function locationSummary(settings: LocationSettings) {
   if (settings.backend_type === "status") return "连接状态";
   const pool = props.upstreamPools.find(pool => pool.id === settings.upstream_pool_id);
   const target = settings.upstream_pool_id ? (pool?.name || "转发服务组") : `${settings.upstream_host}:${settings.upstream_port}`;
-  return `${settings.backend_type === "proxy" ? "反向代理" : settings.backend_type.toUpperCase()} → ${target}${settings.backend_type === "proxy" && settings.proxy_pass_trailing_slash ? "/" : ""}`;
+  return `${settings.backend_type === "proxy" ? "反向代理" : settings.backend_type.toUpperCase()} → ${target}${settings.backend_type === "proxy" ? settings.upstream_path ?? "" : ""}`;
 }
 const inheritanceOptions: { key: GroupField; label: string }[] = [
   { key: "listen_type", label: "监听类型" },
@@ -268,29 +268,36 @@ function parseBackendAddress(value: string) {
   const raw = value.trim();
   const hasScheme = /^https?:\/\//i.test(raw);
   // Leave plain hosts and unbracketed IPv6 unchanged.
-  if (!hasScheme && !/^(?:\[[^\]]+\]|[^:/\s]+):\d+$/.test(raw)) return null;
+  const address = raw.replace(/^https?:\/\//i, "");
+  const slash = address.indexOf("/");
+  const upstreamPath = slash < 0 ? "" : address.slice(slash);
+  const authority = slash < 0 ? address : address.slice(0, slash);
+  if (!hasScheme && !/^(?:\[[^\]]+\]|[^:/\s]+):\d+$/.test(authority)) return null;
+  if (/[?#\\\s]/.test(raw) || (upstreamPath && !/^\/[a-zA-Z0-9/._~+-]*$/.test(upstreamPath))) return null;
+  if (form.root_location.backend_type !== "proxy" && upstreamPath && upstreamPath !== "/") return null;
   try {
     const url = new URL(hasScheme ? raw : `${form.upstream_scheme}://${raw}`);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null;
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
     const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
     if (!url.hostname || port < 1 || port > 65535) return null;
-    return { upstream_host: url.hostname.replace(/^\[|\]$/g, ''), upstream_port: port, upstream_scheme: url.protocol === 'https:' ? 'https' as const : 'http' as const };
+    return { upstreamPath, upstream_host: url.hostname.replace(/^\[|\]$/g, ''), upstream_port: port, upstream_scheme: url.protocol === 'https:' ? 'https' as const : 'http' as const };
   } catch { return null; }
 }
-function applyBackendAddress(parsed: NonNullable<ReturnType<typeof parseBackendAddress>>, raw: string) {
-  Object.assign(form, parsed);
-  if (form.root_location.backend_type === 'proxy') form.root_location.proxy_pass_trailing_slash = raw.trim().endsWith('/');
+function applyBackendAddress(parsed: NonNullable<ReturnType<typeof parseBackendAddress>>) {
+  const { upstreamPath, ...endpoint } = parsed;
+  Object.assign(form, endpoint);
+  if (form.root_location.backend_type === 'proxy') form.root_location.upstream_path = upstreamPath;
 }
 function normalizeBackendAddress() {
   const parsed = parseBackendAddress(form.upstream_host);
-  if (parsed) applyBackendAddress(parsed, form.upstream_host);
+  if (parsed) applyBackendAddress(parsed);
 }
 function pasteBackendAddress(event: ClipboardEvent) {
   const raw = event.clipboardData?.getData('text') || '';
   const parsed = parseBackendAddress(raw);
   if (!parsed) return;
   event.preventDefault();
-  applyBackendAddress(parsed, raw);
+  applyBackendAddress(parsed);
 }
 function submit() {
   if (form.authentication.enabled && !form.authentication.profile_id) {
@@ -525,7 +532,7 @@ async function addLocation() {
       <div class="path-summary"><strong>{{ location.path || "未填写路径" }}</strong><span>{{ locationSummary(location.settings) }}</span></div>
       <div class="location-head">
         <input v-model.trim="location.name" class="input" placeholder="名称" required maxlength="80" />
-        <AppSelect v-model="location.match" @update:model-value="value => { if (value === 'regex') location.settings.proxy_pass_trailing_slash = false; }" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="regex">正则</option></AppSelect>
+        <AppSelect v-model="location.match" @update:model-value="value => { if (value === 'regex') location.settings.upstream_path = ''; }" class="select"><option value="prefix">前缀</option><option value="exact">精确</option><option value="regex">正则</option></AppSelect>
         <input v-model="location.path" class="input" placeholder="/api/" aria-label="自定义路径" required />
         <label class="checkbox-row"><input v-model="location.enabled" type="checkbox" />启用</label>
         <button type="button" class="button danger compact" @click="form.locations.splice(index, 1)">删除</button>

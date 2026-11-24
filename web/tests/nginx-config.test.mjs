@@ -35,7 +35,7 @@ test("multi-server import, unsupported directives and ambiguous upstream URI", (
     /第 2 行/,
   );
   assert.throws(
-    () => importBlocks(raw.replace(":9000;", ":9000/app/;"), ""),
+    () => importBlocks(raw.replace(":9000;", ":9000/$request_uri;"), ""),
     /proxy_pass/,
   );
 });
@@ -50,9 +50,9 @@ test("preserve a proxy_pass root URI independently for each location", () => {
   }`;
   const rule = importBlocks(content, "").rules[0];
   assert.equal(rule.root_location.return_code, 404);
-  assert.deepEqual(rule.locations.map(l => l.settings.proxy_pass_trailing_slash), [true, false]);
+  assert.deepEqual(rule.locations.map(l => l.settings.upstream_path), ["/", ""]);
   const rootProxy = importBlocks(content.replace("return 404;", "proxy_pass https://[::1]/;"), "").rules[0];
-  assert.equal(rootProxy.root_location.proxy_pass_trailing_slash, true);
+  assert.equal(rootProxy.root_location.upstream_path, "/");
   assert.equal(rootProxy.root_location.upstream_port, 443);
   assert.throws(() => importBlocks(content.replace("location /files/", "location ~ /files/"), ""), /proxy_pass/);
 });
@@ -181,11 +181,22 @@ test("conversion errors refer to the complete file, including preceding server b
     lines[2] = "server { listen 8081; } server { listen 8082; }";
     lines[20] = "server { listen 8083; server_name test.local; location / { return 404; }";
     lines[33] = "location /app/ {";
-    lines[34] = "    proxy_pass http://127.0.0.1:9000/app/;";
+    lines[34] = "    proxy_pass http://127.0.0.1:9000/$request_uri;";
     lines[35] = "} }";
     const entries = sourceEntries([{ name: "custom-test.conf", content: lines.join(newline) }]);
     assert.equal(entries[2].line, 21);
     assert.throws(() => sourceRuleCandidate(entries[2], []),
       error => error instanceof ConfigLineError && error.line === 35 && error.message.includes("第 35 行"));
+  }
+});
+
+test("import literal proxy paths without adding or removing a slash", () => {
+  for (const path of ["", "/", "/backend/", "/backend"]) {
+    const config = `server { listen 9080; server_name files.test;
+      location / { proxy_pass http://127.0.0.1:9000${path}; }
+      location /app/ { proxy_pass https://[::1]:9443${path}; } }`;
+    const rule = importBlocks(config, "").rules[0];
+    assert.equal(rule.root_location.upstream_path, path);
+    assert.equal(rule.locations[0].settings.upstream_path, path);
   }
 });

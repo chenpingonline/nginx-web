@@ -136,7 +136,7 @@ export interface LocationSettings {
     | "scgi"
     | "memcached"
     | "status";
-  proxy_pass_trailing_slash?: boolean;
+  upstream_path?: string;
   proxy_ssl_server_name?: boolean;
   upstream_scheme: "http" | "https";
   upstream_pool_id: string;

@@ -1380,14 +1380,14 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		builder.WriteString("        stub_status;\n")
 	default:
 		target := renderHTTPBackend(settings, settings.UpstreamScheme)
-		if settings.ProxyPassTrailingSlash {
+		if settings.UpstreamPath != "" {
 			if waf == nil {
-				target += "/"
+				target += settings.UpstreamPath
 			} else {
 				// Nginx forbids a URI in a named proxy location. Apply the same
 				// prefix replacement after inspection, retaining the query string.
 				pattern := "(?s)^" + regexp.QuoteMeta(path) + "(.*)$"
-				fmt.Fprintf(builder, "        rewrite %s /$1 break;\n", nginxDirectiveQuote(pattern))
+				fmt.Fprintf(builder, "        rewrite %s %s$1 break;\n", nginxDirectiveQuote(pattern), settings.UpstreamPath)
 			}
 		}
 		fmt.Fprintf(builder, "        proxy_pass %s;\n", target)

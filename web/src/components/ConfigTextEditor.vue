@@ -51,5 +51,5 @@ defineExpose({ focusLine });
 .config-text-editor:focus-within { border-color: var(--accent); }
 .gutter { position: relative; overflow: hidden; box-sizing: content-box; flex: none; padding: 0 8px; border-right: 1px solid var(--line-strong); color: var(--text-muted); text-align: right; user-select: none; }
 .gutter > div { position: absolute; right: 8px; top: 0; }
-.config-text-editor textarea { flex: 1; min-width: 0; min-height: min(52vh, 520px); padding: 8px; border: 0; border-radius: 0; margin: 0; font: inherit; tab-size: 4; resize: vertical; white-space: pre; }
+.config-text-editor textarea { flex: 1; min-width: 0; min-height: min(52vh, 520px); padding: 8px; border: 0; border-radius: 0; margin: 0; font: inherit; tab-size: 4; resize: vertical; white-space: pre; overscroll-behavior-y: none; }
 </style>

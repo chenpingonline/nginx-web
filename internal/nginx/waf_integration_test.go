@@ -23,8 +23,8 @@ import (
 // Exercise the generated virtual hosts and delivered upstream requests. BREW
 // is a harmless method outside the CRS allowed-method policy (rule 911100).
 func TestWAFProxyModesWithRealNginx(t *testing.T) { runWAFProxyTest(t, false) }
-func TestTrailingSlashWithRealWAF(t *testing.T)   { runWAFProxyTest(t, true) }
-func runWAFProxyTest(t *testing.T, trailingSlash bool) {
+func TestProxyPathsWithRealWAF(t *testing.T)      { runWAFProxyTest(t, true) }
+func runWAFProxyTest(t *testing.T, checkProxyPaths bool) {
 	t.Helper()
 	bin := os.Getenv("NGINX_TEST_BIN")
 	if bin == "" {
@@ -69,10 +69,12 @@ func runWAFProxyTest(t *testing.T, trailingSlash bool) {
 		id := fmt.Sprintf("%016x", i+1)
 		r := domain.ProxyRule{ID: id, Enabled: true, Name: mode, Domains: []string{mode + ".example.net"}, ListenPort: listen, UpstreamScheme: "http", UpstreamHost: upstream.Hostname(), UpstreamPort: port}
 		domain.NormalizeRule(&r, domain.DefaultState().Settings)
-		if trailingSlash && (mode == "detect" || mode == "off") {
-			files := r.RootLocation
-			files.ProxyPassTrailingSlash = true
-			r.Locations = []domain.LocationRule{{ID: "123456789abc", Name: "files", Enabled: true, Match: "prefix", Path: "/files/", Settings: files}}
+		if checkProxyPaths && (mode == "detect" || mode == "off") {
+			for n, path := range []string{"", "/", "/backend/"} {
+				files := r.RootLocation
+				files.UpstreamPath = path
+				r.Locations = append(r.Locations, domain.LocationRule{ID: fmt.Sprintf("%012x", n+1), Name: "files", Enabled: true, Match: "prefix", Path: fmt.Sprintf("/files%d/", n), Settings: files})
+			}
 		}
 		var instances []domain.WAFInstance
 		if mode == "block" || mode == "excepted" {
@@ -123,18 +125,20 @@ func runWAFProxyTest(t *testing.T, trailingSlash bool) {
 		t.Fatalf("nginx startup: %s", b)
 	}
 	client := http.Client{Timeout: 5 * time.Second}
-	if trailingSlash {
+	if checkProxyPaths {
 		for _, mode := range []string{"off", "detect"} {
-			req, _ := http.NewRequest("GET", "http://"+addr+"/files/a%20b.jpg?v=1", nil)
-			req.Host = mode + ".example.net"
-			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil || resp.StatusCode != 200 || string(body) != "GET /a%20b.jpg?v=1 " {
-				t.Fatalf("trailing slash with %s: %d %q (%v)", mode, resp.StatusCode, body, err)
+			for n, want := range []string{"/files0/", "/", "/backend/"} {
+				req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s/files%d/a%%20b.jpg?v=1", addr, n), nil)
+				req.Host = mode + ".example.net"
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil || resp.StatusCode != 200 || string(body) != "GET "+want+"a%20b.jpg?v=1 " {
+					t.Fatalf("upstream path %q with %s: %d %q (%v)", want, mode, resp.StatusCode, body, err)
+				}
 			}
 		}
 		return
