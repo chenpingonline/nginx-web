@@ -484,6 +484,7 @@ export interface RequestAnalysis {
   recent: RequestSample[];
 }
 export interface DashboardRule {
+  source_file?: string;
   entry_urls?: string[];
   target_url?: string;
   id: string;

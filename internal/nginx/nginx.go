@@ -709,7 +709,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
     map $request_id $fnproxy_waf_checked { default 0; }
     map $host $fnproxy_rule_id { default "default"; }
     log_format fnproxy_topology escape=json '{"rule":"$fnproxy_rule_id","server":"$server_name","scheme":"$scheme","port":"$server_port","address":"$server_addr","client":"$remote_addr","upstream":"$upstream_addr","bytes":$body_bytes_sent}';
-    log_format fnproxy_metrics escape=json '{"time":$msec,"rule":"$fnproxy_rule_id","method":"$request_method","uri":"$uri","status":$status,"bytes":$body_bytes_sent,"request_time":$request_time,"upstream":"$upstream_addr","upstream_status":"$upstream_status","upstream_header_time":"$upstream_header_time","upstream_time":"$upstream_response_time","limit_req_status":"$limit_req_status","limit_conn_status":"$limit_conn_status","limit_policy":"$fnproxy_limit_policy"}';`
+    log_format fnproxy_metrics escape=json '{"time":$msec,"rule":"$fnproxy_rule_id","server":"$server_name","listener":"$scheme :$server_port","address":"$server_addr","method":"$request_method","uri":"$uri","status":$status,"bytes":$body_bytes_sent,"request_time":$request_time,"upstream":"$upstream_addr","upstream_status":"$upstream_status","upstream_header_time":"$upstream_header_time","upstream_time":"$upstream_response_time","limit_req_status":"$limit_req_status","limit_conn_status":"$limit_conn_status","limit_policy":"$fnproxy_limit_policy"}';`
 	// Embed a bounded snapshot in the applied config so later edits or deletions
 	// cannot rewrite the meaning of historical limit events.
 	logFormat += "\n    map $fnproxy_rule_id $fnproxy_limit_policy { default \"\";\n"
@@ -851,7 +851,7 @@ func renderStreamPrelude(state State) string {
 	var builder strings.Builder
 	for _, rule := range state.StreamRules {
 		if rule.Enabled && rule.AccessLog {
-			fmt.Fprintf(&builder, `log_format fnproxy_stream_metrics_%s escape=json '{"time":$msec,"rule":"%s","protocol":"$protocol","status":$status,"sent":$bytes_sent,"received":$bytes_received,"duration":$session_time,"client":"$remote_addr","upstream":"$upstream_addr","limit":"$limit_conn_status"}';
+			fmt.Fprintf(&builder, `log_format fnproxy_stream_metrics_%s escape=json '{"time":$msec,"rule":"%s","listener":"$protocol :$server_port","address":"$server_addr","protocol":"$protocol","status":$status,"sent":$bytes_sent,"received":$bytes_received,"duration":$session_time,"client":"$remote_addr","upstream":"$upstream_addr","limit":"$limit_conn_status"}';
 `, rule.ID, rule.ID)
 		}
 	}

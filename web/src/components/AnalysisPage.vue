@@ -4,7 +4,7 @@ import type { Overview } from '../types';
 import ErrorDetailsPage from './ErrorDetailsPage.vue';
 import StreamAnalysisPage from './StreamAnalysisPage.vue';
 defineProps<{ overview: Overview; busy: boolean; updatedAt: string; initialMinutes: number; initialRule: string }>();
-const emit = defineEmits<{ overview: [value: Overview]; edit: [id: string] }>();
+const emit = defineEmits<{ overview: [value: Overview]; edit: [id: string, sourceFile?: string] }>();
 const protocol = ref('http');
 </script>
 <template>
@@ -19,7 +19,7 @@ const protocol = ref('http');
       </h1>
       <p>{{ protocol === 'http' ? '分析 HTTP / HTTPS 请求量、响应性能、错误和后端表现' : '分析已结束会话、收发流量、会话时长和后端异常' }}</p>
     </header>
-    <ErrorDetailsPage v-if="protocol === 'http'" :overview="overview" :busy="busy" :updated-at="updatedAt" :initial-minutes="initialMinutes" :initial-rule="initialRule" @overview="emit('overview', $event)" @edit="emit('edit', $event)" />
+    <ErrorDetailsPage v-if="protocol === 'http'" :overview="overview" :busy="busy" :updated-at="updatedAt" :initial-minutes="initialMinutes" :initial-rule="initialRule" @overview="emit('overview', $event)" @edit="(id, file) => emit('edit', id, file)" />
     <StreamAnalysisPage v-else :updated-at="updatedAt" :initial-minutes="initialMinutes" @overview="emit('overview', $event)" />
   </div>
 </template>

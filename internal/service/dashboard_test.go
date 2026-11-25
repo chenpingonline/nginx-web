@@ -2,7 +2,9 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,5 +204,78 @@ func TestDashboardURLsPreserveSchemesAndIPv6(t *testing.T) {
 	r.RootLocation.UpstreamPoolID = "pool"
 	if got := dashboardTargetURL(r); got != "" {
 		t.Fatal("pool is not a direct URL", got)
+	}
+}
+
+func TestDashboardListsCustomServersAndScopesTheirRequests(t *testing.T) {
+	s := testService(t)
+	httpFile := domain.CustomConfig{Name: "custom-http.conf", Content: `upstream api {server 127.0.0.1:8080;}
+server {listen 19080; listen [::]:19080; server_name first.test; location / {proxy_pass http://api;} }
+server {listen 19080; server_name second.test; return 204;}`}
+	streamFile := domain.CustomConfig{Name: "custom-dns.stream", Content: `server {listen 127.0.0.1:19053 udp; proxy_pass 127.0.0.1:53;}`}
+	now := time.Now().UTC()
+	if err := s.store.Update(func(st *State) error {
+		st.CustomConfigs = []domain.CustomConfig{httpFile, streamFile}
+		st.LastAppliedAt = &now
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	applied := s.State()
+	writeMigrationJSON(t, s.paths.AppliedState(), applied)
+	s.setAppliedRuntime(applied)
+	d := s.Dashboard(60, "")
+	if len(d.Rules) != 3 || d.AppliedCount != 3 {
+		t.Fatalf("custom dashboard rows: %+v", d.Rules)
+	}
+	rows := map[string]DashboardRule{}
+	for _, r := range d.Rules {
+		if r.ConfigState != "applied" {
+			t.Fatalf("rule not applied: %+v", r)
+		}
+		rows[r.Name] = r
+	}
+	first := rows["first.test"]
+	if first.Target != "api" || len(first.EntryURLs) != 1 || first.EntryURLs[0] != "http://first.test:19080" || rows[streamFile.Name].Protocol != "UDP" {
+		t.Fatal(rows)
+	}
+	// A copied form rule ID and the default ID must both resolve to the Nginx-selected server.
+	var log strings.Builder
+	for _, r := range []struct {
+		server, rule string
+		status       int
+	}{{"first.test", "copied", 404}, {"second.test", "default", 204}} {
+		fmt.Fprintf(&log, `{"time":%f,"server":%q,"rule":%q,"listener":"http :19080","address":"127.0.0.1","status":%d}`+"\n", float64(now.UnixMilli()+1)/1000, r.server, r.rule, r.status)
+	}
+	if err := os.WriteFile(s.paths.MetricsLog(), []byte(log.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.metrics.Collect(now.Add(time.Second), nil, true)
+	result := s.Dashboard(60, first.ID).Metrics
+	if result.Counts.Requests != 1 || result.Counts.ClientErrors == nil || *result.Counts.ClientErrors != 1 || len(result.Analysis.Recent) != 1 || result.Analysis.Recent[0].Rule != first.ID {
+		t.Fatalf("custom scope: %+v", result)
+	}
+	modified := httpFile
+	modified.Content = "server {listen 19080; server_name new.test; return 200;}\n" + httpFile.Content
+	if _, err := s.SaveCustomConfig(httpFile.Name, modified); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteCustomConfig(streamFile.Name); err != nil {
+		t.Fatal(err)
+	}
+	d = s.Dashboard(60, "")
+	if len(d.Rules) != 4 {
+		t.Fatal(d.Rules)
+	}
+	for _, r := range d.Rules {
+		if r.Name == streamFile.Name {
+			if r.ConfigState != "pending_delete" {
+				t.Fatal(r)
+			}
+			continue
+		}
+		if r.ConfigState != "pending" || (r.Name == "first.test" && (r.ID != first.ID || r.Counts == nil || r.Counts.Requests != 1)) {
+			t.Fatal(r)
+		}
 	}
 }

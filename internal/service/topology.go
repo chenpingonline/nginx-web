@@ -88,7 +88,7 @@ func (s *AppService) Topology() topologyView {
 		sort.Strings(site.Targets)
 		v.Sites = append(v.Sites, site)
 	}
-	attachCustomTopology(&v, s.topologyCustom.load(state.CustomConfigs))
+	attachCustomTopology(&v, s.appliedSites.load(state.CustomConfigs))
 	return v
 }
 

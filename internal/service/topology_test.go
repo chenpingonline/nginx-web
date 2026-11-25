@@ -25,10 +25,10 @@ func TestTopologyDestination(t *testing.T) {
 }
 
 func TestCustomTopologySharedBackendAndCopiedID(t *testing.T) {
-	cache := topologyCustomCache{}
+	cache := customSiteCache{}
 	file := domain.CustomConfig{Name: "custom-dns.conf", Content: `server { listen 9090 ssl; listen [::]:9090 ssl; server_name "dns11.nascp.cn"; set $fnproxy_rule_id "managed"; location / { proxy_pass http://127.0.0.1:10053; } }`}
 	sites := cache.load([]domain.CustomConfig{file, {Name: "custom-ignore.stream", Content: file.Content}})
-	if len(sites) != 1 || sites[0].Listener != "HTTPS :9090" || !slices.Equal(sites[0].Targets, []string{"127.0.0.1:10053"}) {
+	if len(sites) != 2 || sites[0].Listener != "HTTPS :9090" || !slices.Equal(sites[0].Targets, []string{"127.0.0.1:10053"}) {
 		t.Fatal(sites)
 	}
 	v := topologyView{Flows: []metrics.TopologyFlow{
@@ -38,7 +38,7 @@ func TestCustomTopologySharedBackendAndCopiedID(t *testing.T) {
 		{Rule: "default", Server: "unknown", Listener: "HTTPS :9090", Address: "127.0.0.1"},
 	}}
 	attachCustomTopology(&v, sites)
-	if len(v.Flows) != 3 || v.Flows[0].Rule != "managed" || v.Flows[1].Rule != sites[0].ID || v.Flows[2].Rule != sites[0].ID {
+	if len(v.Sites) != 1 || len(v.Flows) != 3 || v.Flows[0].Rule != "managed" || v.Flows[1].Rule != sites[0].ID || v.Flows[2].Rule != sites[0].ID {
 		t.Fatal(v.Flows)
 	}
 	if got := cache.load(nil); len(got) != 0 {

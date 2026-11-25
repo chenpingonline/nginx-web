@@ -11,7 +11,7 @@ import { trafficPeriod, trafficRanges } from "./traffic-ranges";
 const props = defineProps<{
   overview: Overview; busy: boolean; updatedAt: string; initialMinutes: number; initialRule: string;
 }>();
-const emit = defineEmits<{ overview: [value: Overview]; edit: [id: string] }>();
+const emit = defineEmits<{ overview: [value: Overview]; edit: [id: string, sourceFile?: string] }>();
 const minutes = ref(props.initialMinutes), selected = ref(props.initialRule);
 const view = ref<"overview" | "limits" | "requests">("overview");
 const dimension = ref<"rules" | "paths" | "backends">("rules");
@@ -169,7 +169,7 @@ function statusClass(status: number | string) {
     <section class="analysis-toolbar" aria-label="全局分析筛选">
         <div class="details-controls">
           <AppSelect v-model="selected" class="select details-rule-select" aria-label="请求分析规则">
-            <option value="">全部 HTTP / HTTPS</option><option v-if="selected && !httpRules.some(rule => rule.id === selected)" :value="selected">历史规则</option><option v-for="rule in httpRules" :key="rule.id" :value="rule.id">{{ rule.name }}</option>
+            <option value="">全部 HTTP / HTTPS</option><option v-if="selected && !httpRules.some(rule => rule.id === selected)" :value="selected">历史规则</option><option v-for="rule in httpRules" :key="rule.id" :value="rule.id">{{ rule.name }}{{ rule.source_file ? ' · ' + rule.listen_address : '' }}</option>
           </AppSelect>
           <div class="range-buttons" aria-label="请求分析时间范围">
             <button v-for="range in trafficRanges" :key="range.value" :class="{ active: minutes === range.value }" :aria-pressed="minutes === range.value" @click="minutes = range.value">{{ range.label }}</button>
@@ -230,7 +230,7 @@ function statusClass(status: number | string) {
         <tbody><tr v-for="rule in visibleRules" :key="rule.id">
           <td><button class="rule-name" @click="selected = rule.id">{{ rule.name }}</button><div class="rule-entry" :title="rule.entry">{{ rule.entry }}</div></td><td>{{ number(rule.counts?.requests) }}</td><td>{{ bytes(rule.counts?.bytes) }}</td><td>{{ duration(averageRequest(rule.counts)) }}</td>
           <td :class="{ 'error-count': (totalErrors(rule.counts) ?? 0) > 0 }">{{ number(totalErrors(rule.counts)) }} / {{ percent(errorRate(rule.counts)) }}</td><td>{{ date(rule.counts?.last_seen) }}</td>
-          <td><button v-if="!overview.hidden_menus?.includes('rules')" class="button ghost small" :disabled="busy || rule.config_state === 'pending_delete'" @click="emit('edit', rule.id)">管理规则<PhArrowRight :size="13" /></button></td>
+          <td><button v-if="!overview.hidden_menus?.includes(rule.source_file ? 'config' : 'rules')" class="button ghost small" :disabled="busy || rule.config_state === 'pending_delete'" @click="emit('edit', rule.id, rule.source_file)">管理规则<PhArrowRight :size="13" /></button></td>
         </tr></tbody>
       </table></div>
       <div v-else-if="fetching && !stats" class="empty-state"><h3>正在读取请求统计…</h3><p>获取所选范围内的规则数据</p></div>

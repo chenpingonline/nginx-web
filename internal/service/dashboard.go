@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 )
 
 type DashboardRule struct {
+	SourceFile    string          `json:"source_file,omitempty"`
 	EntryURLs     []string        `json:"entry_urls,omitempty"`
 	TargetURL     string          `json:"target_url,omitempty"`
 	ID            string          `json:"id"`
@@ -126,6 +128,11 @@ func (s *AppService) Dashboard(minutes int, selected string) Dashboard {
 	if !s.MenuEnabled("streams") {
 		state.StreamRules = nil
 	}
+	var draftCustom []customSite
+	if s.MenuEnabled("config") {
+		draftCustom = s.draftSites.load(state.CustomConfigs)
+	}
+	appliedCustom := s.appliedSites.load(applied.CustomConfigs)
 	d := Dashboard{Overview: s.Overview(), AppliedKnown: known, AppliedPorts: []int{}, Rules: []DashboardRule{}, Certificates: []CertificateAlert{}}
 	if s.MenuEnabled("errors") {
 		d.MonitoringReady, d.AccessLogging = s.monitoringConfig()
@@ -133,7 +140,18 @@ func (s *AppService) Dashboard(minutes int, selected string) Dashboard {
 		d.StreamMetrics = s.streamMetrics.Snapshot(now, minutes, selected)
 		activeRules := state.StreamRules
 		if known {
-			activeRules = applied.StreamRules
+			activeRules = slices.Clone(applied.StreamRules)
+			for _, site := range appliedCustom {
+				if site.protocol == "TCP" {
+					port, err := strconv.Atoi(site.port)
+					if err != nil {
+						continue
+					}
+					for _, addr := range site.addresses {
+						activeRules = append(activeRules, domain.StreamRule{ID: site.ID, Protocol: "tcp", Enabled: true, ListenAddress: addr, ListenPort: port})
+					}
+				}
+			}
 		}
 		if d.Overview.Nginx.Running {
 			d.StreamMetrics.ActiveConnections = countActiveTCPConnections(activeRules, selected, "/proc/net/tcp", "/proc/net/tcp6")
@@ -145,6 +163,9 @@ func (s *AppService) Dashboard(minutes int, selected string) Dashboard {
 		d.StreamMetrics.Ready = strings.Contains(string(master), "# fnproxy_stream_metrics_v1")
 		files, _ := filepath.Glob(filepath.Join(s.paths.NginxConfD, "*.stream"))
 		for _, path := range files {
+			if strings.HasPrefix(filepath.Base(path), "custom-") {
+				continue
+			}
 			content, _ := os.ReadFile(path)
 			for _, line := range strings.Split(string(content), "\n") {
 				fields := strings.Fields(line)
@@ -153,11 +174,23 @@ func (s *AppService) Dashboard(minutes int, selected string) Dashboard {
 				}
 			}
 		}
+		for _, site := range appliedCustom {
+			if site.streamMetricsLog != "" && site.streamMetricsLog == s.paths.StreamMetricsLog() {
+				d.StreamMetrics.LoggingRules = append(d.StreamMetrics.LoggingRules, site.ID)
+			}
+		}
 	}
 	stats := d.Metrics
 	if known {
-		d.AppliedCount = domain.EnabledRuleCount(applied)
+		d.AppliedCount = domain.EnabledRuleCount(applied) + len(appliedCustom)
 		d.AppliedPorts = domain.ActivePorts(applied)
+		for _, site := range appliedCustom {
+			if port, err := strconv.Atoi(site.port); err == nil {
+				d.AppliedPorts = append(d.AppliedPorts, port)
+			}
+		}
+		slices.Sort(d.AppliedPorts)
+		d.AppliedPorts = slices.Compact(d.AppliedPorts)
 	}
 	// Shared runtime changes also need applying even if a rule itself is unchanged.
 	sharedEqual := known && reflect.DeepEqual(state.Settings, applied.Settings) && reflect.DeepEqual(state.UpstreamPools, applied.UpstreamPools) && reflect.DeepEqual(state.RateLimitPolicies, applied.RateLimitPolicies)
@@ -230,9 +263,65 @@ func (s *AppService) Dashboard(minutes int, selected string) Dashboard {
 			d.Rules = append(d.Rules, DashboardRule{ID: rule.ID, Name: rule.Name, Protocol: strings.ToUpper(rule.Protocol), Entry: rule.ListenAddress + ":" + itoa(rule.ListenPort), ListenAddress: dashboardListenAddress(rule.ListenAddress, rule.ListenPort), Target: poolOrHost(rule.UpstreamPoolID, rule.UpstreamHost, rule.UpstreamPort, applied), ConfigState: "pending_delete", Enabled: true})
 		}
 	}
-	sort.Slice(d.Rules, func(i, j int) bool { return d.Rules[i].Name < d.Rules[j].Name })
+	d.addCustomRules(draftCustom, appliedCustom, state.CustomConfigs, applied.CustomConfigs, sharedEqual)
+	sort.Slice(d.Rules, func(i, j int) bool {
+		if d.Rules[i].Name == d.Rules[j].Name {
+			return d.Rules[i].ID < d.Rules[j].ID
+		}
+		return d.Rules[i].Name < d.Rules[j].Name
+	})
 	d.Certificates = certificateAlerts(state, applied, now)
 	return d
+}
+
+func (d *Dashboard) addCustomRules(draft, applied []customSite, files, oldFiles []domain.CustomConfig, sharedEqual bool) {
+	old := map[string]customSite{}
+	for _, site := range applied {
+		old[site.ID] = site
+	}
+	oldContent := map[string]string{}
+	for _, file := range oldFiles {
+		oldContent[file.Name] = file.Content
+	}
+	unchanged := map[string]bool{}
+	for _, file := range files {
+		unchanged[file.Name] = oldContent[file.Name] == file.Content
+	}
+	appendRow := func(site customSite, status string) {
+		row := DashboardRule{ID: site.ID, Name: site.Name, Protocol: site.protocol, SourceFile: site.file, Enabled: true, ConfigState: status, Target: strings.Join(site.Targets, ", ")}
+		var listen []string
+		for _, addr := range site.addresses {
+			if site.port != "" {
+				addr = net.JoinHostPort(addr, site.port)
+			}
+			listen = append(listen, addr)
+		}
+		row.ListenAddress = strings.Join(listen, ", ")
+		row.Entry = row.ListenAddress
+		if site.protocol == "HTTP" || site.protocol == "HTTPS" {
+			for _, host := range site.names {
+				// Nginx also accepts regexes, variables and the empty name.
+				if site.port != "" && host != "_" && domain.ValidServerHost(host) {
+					row.EntryURLs = append(row.EntryURLs, strings.ToLower(site.protocol)+"://"+net.JoinHostPort(strings.Trim(host, "[]"), site.port))
+				}
+			}
+			if counts, ok := d.Metrics.Rules[site.ID]; ok {
+				row.Counts = &counts
+			}
+		}
+		if row.Target == "" {
+			row.Target = "—"
+		}
+		d.Rules = append(d.Rules, row)
+	}
+	for _, site := range draft {
+		_, exists := old[site.ID]
+		appendRow(site, ruleConfigState(d.AppliedKnown, exists, exists, true, sharedEqual && unchanged[site.file]))
+		delete(old, site.ID)
+	}
+	for _, site := range old {
+		appendRow(site, "pending_delete")
+	}
 }
 
 func dashboardListenAddress(address string, port int) string {

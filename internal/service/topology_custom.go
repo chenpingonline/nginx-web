@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,57 +18,65 @@ import (
 	crossplane "github.com/nginxinc/nginx-go-crossplane"
 )
 
-// Reuse the parsed configuration between polls. Only applied HTTP files participate.
-type topologyCustomCache struct {
+// Reuse parsed source files between dashboard and topology polls.
+type customSiteCache struct {
 	mu    sync.Mutex
 	files []domain.CustomConfig
-	sites []customTopologySite
+	sites []customSite
 }
-type customTopologySite struct {
+type customSite struct {
 	topologySite
-	server    string
-	addresses []string
+	file, protocol, port, server string
+	names                        []string
+	streamMetricsLog             string
+	addresses                    []string
 }
 
-func (c *topologyCustomCache) load(files []domain.CustomConfig) []customTopologySite {
+func (c *customSiteCache) load(files []domain.CustomConfig) []customSite {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !slices.Equal(c.files, files) {
-		var sites []customTopologySite
+		var sites []customSite
 		for _, f := range files {
-			if strings.HasSuffix(f.Name, ".conf") {
-				sites = append(sites, parseTopologySites(f)...)
-			}
+			sites = append(sites, parseCustomSites(f)...)
 		}
 		c.files = slices.Clone(files)
 		c.sites = sites
 	}
 	return c.sites
 }
-func topologyListener(args []string) (string, string) {
+func customListener(args []string, stream bool) (protocol, port, address string) {
 	if len(args) == 0 {
-		return "", ""
+		return
 	}
-	address := args[0]
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		if net.ParseIP(strings.Trim(address, "[]")) != nil {
-			host = strings.Trim(address, "[]")
-			port = "80"
-		} else {
-			host = "*"
-			port = address
+	protocol = "HTTP"
+	if stream {
+		protocol = "TCP"
+		if slices.Contains(args[1:], "udp") {
+			protocol = "UDP"
 		}
+	} else if slices.Contains(args[1:], "ssl") || slices.Contains(args[1:], "quic") {
+		protocol = "HTTPS"
 	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return "", ""
+	address = args[0]
+	if strings.HasPrefix(address, "unix:") {
+		return
 	}
-	proto := "HTTP"
-	if slices.Contains(args[1:], "ssl") {
-		proto = "HTTPS"
+	host, p, err := net.SplitHostPort(address)
+	if err == nil {
+		address, port = host, p
+	} else if _, err := strconv.Atoi(address); err == nil {
+		port, address = address, "0.0.0.0"
+	} else if !stream {
+		address, port = strings.Trim(address, "[]"), "80"
 	}
-	return fmt.Sprintf("%s :%d", proto, n), host
+	if address == "*" || address == "" {
+		address = "0.0.0.0"
+	}
+	if ip := net.ParseIP(address); ip != nil {
+		address = ip.String()
+	}
+	return
 }
 func topologyPassTargets(nodes crossplane.Directives, targets map[string]bool) {
 	for _, d := range nodes {
@@ -91,32 +99,45 @@ func topologyPassTargets(nodes crossplane.Directives, targets map[string]bool) {
 		}
 	}
 }
-func parseTopologySites(f domain.CustomConfig) []customTopologySite {
+func parseCustomSites(f domain.CustomConfig) []customSite {
 	p, err := crossplane.Parse(f.Name, &crossplane.ParseOptions{SingleFile: true, SkipDirectiveContextCheck: true, SkipDirectiveArgsCheck: true, Open: func(string) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(f.Content)), nil }})
-	if err != nil || len(p.Config) != 1 {
+	if err != nil || len(p.Config) != 1 || len(p.Errors) != 0 {
 		return nil
 	}
-	var sites []customTopologySite
-	for index, block := range p.Config[0].Parsed {
+	var sites []customSite
+	stream := strings.HasSuffix(f.Name, ".stream")
+	type binding struct{ protocol, port string }
+	seen := map[string]int{}
+	for _, block := range p.Config[0].Parsed {
 		if block.Directive != "server" {
 			continue
 		}
 		var names []string
-		listeners := map[string][]string{}
+		listeners := map[binding][]string{}
+		metricsLog := ""
 		hasListen := false
 		for _, d := range block.Block {
 			switch d.Directive {
 			case "listen":
 				hasListen = true
-				if label, host := topologyListener(d.Args); label != "" {
-					listeners[label] = append(listeners[label], host)
+				if protocol, port, host := customListener(d.Args, stream); protocol != "" {
+					k := binding{protocol, port}
+					listeners[k] = append(listeners[k], host)
+				}
+			case "access_log":
+				if len(d.Args) >= 2 && strings.HasPrefix(d.Args[1], "fnproxy_stream_metrics_") {
+					metricsLog = d.Args[0]
 				}
 			case "server_name":
 				names = append(names, d.Args...)
 			}
 		}
-		if !hasListen {
-			listeners["HTTP :80"] = []string{"*"}
+		if !hasListen && !stream {
+			port := "80"
+			if os.Geteuid() != 0 {
+				port = "8000"
+			}
+			listeners[binding{"HTTP", port}] = []string{"0.0.0.0"}
 		}
 		targets := map[string]bool{}
 		topologyPassTargets(block.Block, targets)
@@ -133,9 +154,21 @@ func parseTopologySites(f domain.CustomConfig) []customTopologySite {
 		if label == "" {
 			label = f.Name
 		}
-		for _, listener := range slices.Sorted(maps.Keys(listeners)) {
-			sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", f.Name, index, listener)))
-			sites = append(sites, customTopologySite{topologySite: topologySite{ID: "custom-" + hex.EncodeToString(sum[:16]), Name: label, Listener: listener, Targets: sorted}, server: server, addresses: listeners[listener]})
+		for binding, addrs := range listeners {
+			slices.Sort(addrs)
+			addrs = slices.Compact(addrs)
+			listener := binding.protocol + " :" + binding.port
+			if binding.port == "" {
+				listener = binding.protocol + " " + strings.Join(addrs, ", ")
+			}
+			identity := strings.Join([]string{f.Name, strings.ToLower(server), listener, strings.Join(addrs, ",")}, "\x00")
+			seen[identity]++
+			sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", identity, seen[identity])))
+			sites = append(sites, customSite{
+				topologySite: topologySite{ID: "custom-" + hex.EncodeToString(sum[:16]), Name: label, Listener: listener, Targets: sorted},
+				file:         f.Name, protocol: binding.protocol, port: binding.port,
+				server: server, names: names, addresses: addrs, streamMetricsLog: metricsLog,
+			})
 		}
 	}
 	return sites
@@ -143,30 +176,54 @@ func parseTopologySites(f domain.CustomConfig) []customTopologySite {
 
 // The server selected by Nginx is authoritative: custom blocks can carry a
 // copied managed rule ID, and distinct sites can share the same backend.
-func attachCustomTopology(v *topologyView, custom []customTopologySite) {
-	type key struct{ server, listener, address string }
-	ids := map[key]string{}
+type siteKey struct{ server, listener, address string }
+type siteIndex map[siteKey]string
+
+func (ids siteIndex) add(k siteKey, id string) {
+	// An ambiguous binding cannot identify a server.
+	if old, ok := ids[k]; ok && old != id {
+		id = ""
+	}
+	ids[k] = id
+}
+func indexCustomSites(custom []customSite) siteIndex {
+	ids := siteIndex{}
 	for _, site := range custom {
-		v.Sites = append(v.Sites, site.topologySite)
+		name := strings.ToLower(site.server)
+		if site.protocol == "TCP" || site.protocol == "UDP" {
+			name = ""
+		}
+		listener := site.protocol + " :" + site.port
 		for _, addr := range site.addresses {
-			if addr == "*" {
-				addr = "0.0.0.0"
-			}
-			ids[key{strings.ToLower(site.server), site.Listener, addr}] = site.ID
+			ids.add(siteKey{name, listener, addr}, site.ID)
+		}
+	}
+	return ids
+}
+func (ids siteIndex) lookup(server, listener, address string) string {
+	if len(ids) == 0 || address == "" {
+		return ""
+	}
+	k := siteKey{strings.ToLower(server), listener, address}
+	if id, ok := ids[k]; ok {
+		return id
+	}
+	k.address = "0.0.0.0"
+	if strings.Contains(address, ":") {
+		k.address = "::"
+	}
+	return ids[k]
+}
+func attachCustomTopology(v *topologyView, custom []customSite) {
+	ids := indexCustomSites(custom)
+	for _, site := range custom {
+		if site.protocol == "HTTP" || site.protocol == "HTTPS" {
+			v.Sites = append(v.Sites, site.topologySite)
 		}
 	}
 	visible := v.Flows[:0]
 	for _, flow := range v.Flows {
-		k := key{strings.ToLower(flow.Server), flow.Listener, flow.Address}
-		id := ids[k]
-		if id == "" && flow.Address != "" {
-			k.address = "0.0.0.0"
-			if strings.Contains(flow.Address, ":") {
-				k.address = "::"
-			}
-			id = ids[k]
-		}
-		if id != "" {
+		if id := ids.lookup(flow.Server, flow.Listener, flow.Address); id != "" {
 			flow.Rule = id
 		}
 		if flow.Rule != "" && flow.Rule != "default" {
@@ -174,4 +231,33 @@ func attachCustomTopology(v *topologyView, custom []customTopologySite) {
 		}
 	}
 	v.Flows = visible
+}
+
+func (s *AppService) setCustomMetricRules(state State) {
+	effective := domain.MenuRuntimeState(state)
+	ids := indexCustomSites(s.appliedSites.load(effective.CustomConfigs))
+	// A managed server and a custom server may have the same primary name and
+	// binding. Preserve Nginx's logged rule in cases the endpoint cannot resolve.
+	for _, rule := range effective.Rules {
+		if !rule.Enabled || len(rule.Domains) == 0 {
+			continue
+		}
+		name := strings.ToLower(rule.Domains[0])
+		if name == "*" {
+			name = "_"
+		}
+		protocol := "HTTP"
+		if rule.TLS {
+			protocol = "HTTPS"
+		}
+		for _, family := range domain.ListenFamilies(rule.ListenType) {
+			addr := "0.0.0.0"
+			if family == "ipv6" {
+				addr = "::"
+			}
+			ids.add(siteKey{name, fmt.Sprintf("%s :%d", protocol, rule.ListenPort), addr}, "")
+		}
+	}
+	s.metrics.SetCustomRuleLookup(ids.lookup)
+	s.streamMetrics.SetCustomRuleLookup(ids.lookup)
 }

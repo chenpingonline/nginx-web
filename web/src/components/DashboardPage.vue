@@ -40,7 +40,7 @@ const protocols = computed(() => ["all", "HTTP", "HTTPS", "TCP", "UDP"].map(valu
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase();
   return rules.value.filter(rule =>
-    (!term || `${rule.name} ${rule.entry} ${rule.target}`.toLowerCase().includes(term)) &&
+    (!term || `${rule.name} ${rule.entry} ${rule.target} ${rule.source_file ?? ''} ${rule.entry_urls?.join(' ') ?? ''}`.toLowerCase().includes(term)) &&
     (protocol.value === "all" || rule.protocol === protocol.value) &&
     (configFilter.value === "all" || rule.config_state === configFilter.value),
   ).sort((a, b) => sort.value === "name" ? a.name.localeCompare(b.name, "zh-CN") :

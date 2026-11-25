@@ -54,7 +54,7 @@ function inspect(rule:string) { selected.value=rule; tab.value='sessions'; }
   <p v-if="notice" class="details-notice" role="status">{{ notice }}</p>
   <section class="analysis-toolbar">
    <div class="details-controls">
-    <AppSelect v-model="selected" class="select details-rule-select" aria-label="TCP/UDP 分析规则"><option value="">全部 TCP / UDP</option><option v-if="selected && !names.has(selected)" :value="selected">历史规则 {{ selected }}</option><option v-for="r in streamRules" :key="r.id" :value="r.id">{{ r.name }} · {{ r.protocol }}</option></AppSelect>
+    <AppSelect v-model="selected" class="select details-rule-select" aria-label="TCP/UDP 分析规则"><option value="">全部 TCP / UDP</option><option v-if="selected && !names.has(selected)" :value="selected">历史规则 {{ selected }}</option><option v-for="r in streamRules" :key="r.id" :value="r.id">{{ r.name }} · {{ r.protocol }}{{ r.source_file ? ' · ' + r.listen_address : '' }}</option></AppSelect>
     <div class="range-buttons" aria-label="TCP/UDP 分析时间范围"><button v-for="r in trafficRanges" :key="r.value" :class="{ active: minutes === r.value }" :aria-pressed="minutes === r.value" @click="minutes=r.value">{{ r.label }}</button></div>
    </div>
    <button class="button ghost small" :disabled="fetching" @click="load()">{{ fetching ? '更新中…' : '刷新' }}</button>

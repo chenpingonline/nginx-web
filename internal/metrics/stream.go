@@ -69,6 +69,7 @@ type streamCheckpoint struct {
 	Recent  []StreamSample                  `json:"recent"`
 }
 type StreamCollector struct {
+	customRule                                func(server, listener, address string) string
 	mu                                        sync.Mutex
 	data                                      streamCheckpoint
 	logPath, historyPath, issue, historyIssue string
@@ -93,13 +94,26 @@ func NewStream(logPath, historyPath string, now time.Time) *StreamCollector {
 	}
 	return c
 }
+func (c *StreamCollector) SetCustomRuleLookup(lookup func(server, listener, address string) string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.customRule = lookup
+}
+
 func (c *StreamCollector) ingest(line []byte, now time.Time) {
 	var v struct {
 		StreamSample
 		Timestamp float64 `json:"time"`
+		Listener  string  `json:"listener"`
+		Address   string  `json:"address"`
 	}
 	if json.Unmarshal(line, &v) != nil || math.IsNaN(v.Timestamp) || math.IsInf(v.Timestamp, 0) || v.Timestamp <= 0 || v.Rule == "" || len(v.Rule) > 128 || (v.Protocol != "TCP" && v.Protocol != "UDP") || v.Status < 200 || v.Status > 599 || v.Duration < 0 || math.IsNaN(v.Duration) || math.IsInf(v.Duration, 0) {
 		return
+	}
+	if c.customRule != nil && v.Listener != "" {
+		if id := c.customRule("", v.Listener, v.Address); id != "" {
+			v.Rule = id
+		}
 	}
 	v.StreamSample.Time = time.UnixMilli(int64(math.Round(v.Timestamp * 1000)))
 	if v.Time.Before(c.data.Since) || v.Time.Before(now.Add(-Retention)) || v.Time.After(now.Add(time.Minute)) {

@@ -670,9 +670,15 @@ function changeLogScope() {
   logLines.value = [];
   void loadLogs();
 }
-async function openDashboardRule(id: string) {
+async function openDashboardRule(id: string, sourceFile?: string) {
   await loadCore(true);
   if (connectionError.value) return;
+  if (sourceFile) {
+    const file = state.value?.custom_configs?.find(item => item.name === sourceFile);
+    if (file) openCustomConfig(file);
+    else toast("该源文件已不存在，请刷新列表", "error");
+    return;
+  }
   const rule = state.value?.rules.find(item => item.id === id);
   if (rule) openRule(rule);
   else toast("该规则已不存在，请刷新列表", "error");

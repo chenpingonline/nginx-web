@@ -44,7 +44,8 @@ type NginxStatus = domain.NginxStatus
 type ApplyResult = domain.ApplyResult
 
 type AppService struct {
-	topologyCustom       topologyCustomCache
+	appliedSites         customSiteCache
+	draftSites           customSiteCache
 	WAF                  waf.Inspector
 	paths                Paths
 	store                *Store
@@ -110,12 +111,23 @@ func New(paths Paths) (*AppService, error) {
 	service.initializeAppliedAuth()
 	// Repair stale flags only against independent evidence of activation.
 	initial := store.Snapshot()
-	if applied, known := service.appliedState(initial); known && initial.Dirty != !sameToggleConfiguration(initial, applied) {
+	applied, known := service.appliedState(initial)
+	if known {
+		service.setCustomMetricRules(applied)
+	}
+	if known && initial.Dirty != !sameToggleConfiguration(initial, applied) {
 		if err := service.updateState(func(*State) error { return nil }); err != nil {
 			return nil, fmt.Errorf("修正配置同步状态失败: %w", err)
 		}
 	}
 	return service, nil
+}
+
+func (s *AppService) setAppliedRuntime(state State) {
+	s.setCustomMetricRules(state)
+	s.setAppliedAuthProfiles(state.AuthProfiles)
+	s.setAppliedMenus(state.Settings.HiddenMenus)
+	s.setAppliedGatewayRoutes(state.GatewayRoutes)
 }
 
 func (s *AppService) Prepare() (ApplyResult, error) {
@@ -669,9 +681,7 @@ func (s *AppService) recordAppliedState(state State, result ApplyResult, summary
 	if persistErr == nil {
 		persistErr = fileutil.WriteFileAtomic(s.paths.AppliedState(), data, 0600)
 	}
-	s.setAppliedAuthProfiles(applied.AuthProfiles)
-	s.setAppliedMenus(applied.Settings.HiddenMenus)
-	s.setAppliedGatewayRoutes(applied.GatewayRoutes)
+	s.setAppliedRuntime(applied)
 	if err := s.updateState(func(current *State) error {
 		current.LiveGatewayRoutes = nil
 		current.LastAppliedAt = &now

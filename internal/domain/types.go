@@ -595,6 +595,9 @@ func ValidateState(state State) error {
 	return nil
 }
 
+// ValidServerHost reports whether a server_name can be displayed as a URL host.
+func ValidServerHost(name string) bool { return validateHostName(name, true) == nil }
+
 func validateHostName(value string, allowWildcard bool) error {
 	value = strings.TrimSpace(strings.Trim(value, "[]"))
 	if value == "" {

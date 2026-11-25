@@ -136,6 +136,7 @@ type Result struct {
 }
 
 type Collector struct {
+	customRule           func(server, listener, address string) string
 	topology             [8192]TopologyHit
 	topologyNext         int
 	mu                   sync.Mutex
@@ -528,6 +529,9 @@ func (c *Collector) Snapshot(now time.Time, minutes int, ruleID string) Result {
 }
 
 type logRecord struct {
+	Server             string                    `json:"server"`
+	Listener           string                    `json:"listener"`
+	Address            string                    `json:"address"`
 	LimitRequest       string                    `json:"limit_req_status"`
 	LimitConnection    string                    `json:"limit_conn_status"`
 	LimitPolicy        string                    `json:"limit_policy"`
@@ -547,11 +551,23 @@ type logRecord struct {
 	UpstreamTime       string                    `json:"upstream_time"`
 }
 
+func (c *Collector) SetCustomRuleLookup(lookup func(server, listener, address string) string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.customRule = lookup
+}
+
 func (c *Collector) ingest(line []byte, now time.Time) {
 	var record logRecord
 	var raw map[string]json.RawMessage
 	if json.Unmarshal(line, &raw) != nil || json.Unmarshal(line, &record) != nil || record.Time <= 0 || math.IsNaN(record.Time) || record.Status < 100 || record.Status > 599 || len(record.Rule) > 80 || record.Rule == "" {
 		return
+	}
+	if c.customRule != nil && record.Listener != "" {
+		if id := c.customRule(record.Server, strings.ToUpper(record.Listener), record.Address); id != "" {
+			record.Rule = id
+			record.LimitPolicy = ""
+		}
 	}
 	_, record.HasRequestTime = raw["request_time"]
 	_, hasReq := raw["limit_req_status"]
