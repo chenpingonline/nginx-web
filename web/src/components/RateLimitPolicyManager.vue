@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import { computed, reactive, ref, toRaw } from "vue";
 import type { RateLimitPolicy, RateLimitPolicyInput } from "../types";
 import HelpHint from "./HelpHint.vue";
@@ -96,8 +97,8 @@ function savedResult(saved?: RateLimitPolicy, error?: string) {
         <input v-model.number="form.settings.connections" class="input" type="number" min="0" max="100000" />
       </label>
       <label class="field">
-        <span class="rate-policy-field-label">单请求限速（KB/s）<HelpHint text="按单个响应计算，并行下载的速度会叠加；0 表示不限制。" /></span>
-        <input v-model.number="form.settings.download_kbps" class="input" type="number" min="0" max="1048576" />
+        <span class="rate-policy-field-label">单请求限速<HelpHint text="例如 128k 表示每个响应每秒 128 KB，0 表示不限制。" /></span>
+        <NginxQuantityInput unit="kib" v-model="form.settings.download_kbps" class="input" min="0" max="1048576" />
       </label>
 
       <section class="rate-policy-impact full" aria-live="polite">

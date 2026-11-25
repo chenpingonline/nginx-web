@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 
+defineProps<{ readonly?: boolean }>();
 const content = defineModel<string>({ required: true });
 const editor = ref<HTMLTextAreaElement>();
 const scrollTop = ref(0);
@@ -41,7 +42,7 @@ defineExpose({ focusLine });
         <div v-for="n in visible" :key="first + n">{{ first + n }}</div>
       </div>
     </div>
-    <textarea id="custom-config-content" ref="editor" v-model="content" class="textarea" required
+    <textarea id="custom-config-content" ref="editor" v-model="content" :readonly="readonly" class="textarea" required
       spellcheck="false" wrap="off" maxlength="1048576" @scroll="scrollTop = editor!.scrollTop"></textarea>
   </div>
 </template>

@@ -9,11 +9,14 @@ import (
 
 func TestImportPreviewCommitAndLocationConflict(t *testing.T) {
 	s := testService(t)
-	r := ProxyRule{ID: "abcdef123456", Name: "demo", Domains: []string{"demo.test"}, ListenPort: 19187, UpstreamHost: "127.0.0.1", UpstreamPort: 8123, Enabled: false}
+	r := ProxyRule{ID: "abcdef123456", Name: "demo", Domains: []string{"demo.test"}, ListenPort: 19187, UpstreamHost: "127.0.0.1", UpstreamPort: 8123, ClientMaxBodySize: "512k", Enabled: false}
 	input := ConfigImport{Rules: []ProxyRule{r}}
 	preview, err := s.ImportConfig(input, false)
 	if err != nil || len(preview) != 1 || len(s.State().Rules) != 0 {
 		t.Fatalf("preview: %v, %v", preview, err)
+	}
+	if !strings.Contains(preview[0], "client_max_body_size 512k;") {
+		t.Fatal(preview[0])
 	}
 	input.Expected = []string{"stale"}
 	if _, err = s.ImportConfig(input, true); err == nil || len(s.State().Rules) != 0 {

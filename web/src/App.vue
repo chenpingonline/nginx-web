@@ -57,12 +57,13 @@ import RuntimeSettingsForm from "./components/RuntimeSettingsForm.vue";
 import SidebarIcon from "./components/SidebarIcon.vue";
 import GatewayRoutesPage from "./components/GatewayRoutesPage.vue";
 import ConfigDialog from "./components/ConfigDialog.vue";
-import { sourceImportMode } from "./sourceImport";
+import NameConflictNotice from "./components/NameConflictNotice.vue";
 import SourceParameterDialog from "./components/SourceParameterDialog.vue";
 import ProxyAddress from "./components/ProxyAddress.vue";
+import HttpRuleTableHead from "./components/HttpRuleTableHead.vue";
 import ConfigSources from "./components/ConfigSources.vue";
 import ConfigTextEditor from "./components/ConfigTextEditor.vue";
-import { parseConfig, ConfigLineError, UnsupportedFormError, replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
+import { UnsupportedFormError, replaceSourceRange, formSourceBlock, updateSourceBlock, sourceBlock, sourceRuleCandidate, ruleDirectives, sourceEntries,matchSource,type SourceEntry } from "./nginxConfig";
 import StreamRulesPage from "./components/StreamRulesPage.vue";
 import type {
   ApplyResult,
@@ -310,8 +311,7 @@ async function saveRuleGroup(value: RuleGroup): Promise<{ group: RuleGroup; erro
     const group = await saveObject<RuleGroup>("/rule-groups", value.id, value);
     saved = true;
     try {
-      await request("/apply", { method: "POST", body: jsonBody({ summary: `保存分组：${group.name}` }) });
-      toast("分组已保存并应用", "success");
+      await applyDraft(`保存分组：${group.name}`, "分组已保存并应用");
       return { group };
     } catch (e) { return { group, error: `分组已保存，但应用失败：${errorMessage(e)}。修正后可再次保存并应用。` }; }
   } finally {
@@ -328,8 +328,7 @@ async function deleteRuleGroup(id: string): Promise<boolean> {
     await request(`/rule-groups/${id}`, { method: "DELETE" });
     deleted = true;
     try {
-      await request("/apply", { method: "POST", body: jsonBody({ summary: "删除代理分组" }) });
-      toast("分组已删除，规则配置已保留", "success");
+      await applyDraft("删除代理分组", "分组已删除，规则配置已保留");
     } catch (e) { toast(`分组已删除，但应用失败：${errorMessage(e)}，请到“Nginx 配置”页面重试保存并应用。`, "error"); }
     return true;
   } finally {
@@ -395,14 +394,18 @@ async function sourceSaved() {
   await loadCore(true);
 }
 const configEditor = ref<InstanceType<typeof ConfigTextEditor>>();
-async function editSource(entry: SourceEntry, line = entry.line) {
-  openCustomConfig(entry.file);
-  await nextTick();
-  configEditor.value?.focusLine(line);
-}
-async function openSourceError(entry: SourceEntry, error: unknown) {
-  toast(errorMessage(error) + "。已打开源文件。", "error");
-  await editSource(entry, error instanceof ConfigLineError ? error.line : entry.line);
+const sourceEditorEntry = ref<SourceEntry>();
+const sourceFormIssue = ref("");
+async function finishSourceEdit(apply: boolean) {
+  const entry = sourceEditorEntry.value;
+  if (modal.value === "rule") modal.value = null;
+  sourceEditorEntry.value = undefined;
+  if (apply && entry) {
+    await mutate(() => applyDraft("保存并应用自定义配置：" + entry.file.name, "自定义配置已保存并应用"));
+    await loadCore(true);
+  } else {
+    await sourceSaved();
+  }
 }
 async function keepSource(source: string, stream: boolean, line?: number) {
   importing.value = false;
@@ -696,27 +699,29 @@ async function mutate<T>(fn: () => Promise<T>, success?: string) {
     busy.value = false;
   }
 }
+const conflictNotice = ref<ApplyResult>();
+function reportActivation(result: ApplyResult, message?: string) {
+  conflictNotice.value = result.warnings?.length ? result : undefined;
+  if (!conflictNotice.value) toast(message || result.message, "success");
+}
+async function applyDraft(summary: string, message?: string) {
+  const result = await request<ApplyResult>("/apply", { method: "POST", body: jsonBody({ summary }) });
+  reportActivation(result, message);
+  return result;
+}
 async function runNginxAction(action: NginxAction) {
   const labels = { start: "启动", stop: "停止", reload: "重载", test: "校验" };
   const result = await mutate(() =>
     request<ApplyResult>(`/nginx/${action}`, { method: "POST", body: "{}" }),
   );
   if (result) {
-    toast(result.message || `${labels[action]}成功`, "success");
+    if (action === "reload" || action === "start") reportActivation(result);
+    else toast(result.message || `${labels[action]}成功`, "success");
     await loadCore(true);
   }
 }
 async function applyConfiguration() {
-  const result = await mutate(() =>
-    request<ApplyResult>("/apply", {
-      method: "POST",
-      body: jsonBody({ summary: "从管理页面保存并应用" }),
-    }),
-  );
-  if (result) {
-    toast(result.message || "配置已应用", "success");
-    await loadCore(true);
-  }
+  if (await mutate(() => applyDraft("从管理页面保存并应用"))) await loadCore(true);
 }
 async function discardDraft() {
   if (!(await ask(
@@ -731,6 +736,7 @@ async function discardDraft() {
   }
 }
 const sourceReplacement = ref<ReturnType<typeof sourceRuleCandidate>["source"]>();
+const ruleSourceEntry = ref<SourceEntry>();
 const annotatedHTTPSource = ref(false);
 async function inspectSource(entry: SourceEntry) {
   const block = formSourceBlock(entry);
@@ -768,8 +774,8 @@ async function changeSource(entry: SourceEntry, remove: boolean) {
         await saveSourceRule(source, { ...rule, enabled: false });
       }
       saved = true;
-      await request("/apply", { method: "POST", body: jsonBody({summary: verb + "规则：" + entry.title}) });
-    }, "规则已" + verb + "并应用");
+      await applyDraft(verb + "规则：" + entry.title, "规则已" + verb + "并应用");
+    });
     if (saved) await loadCore(true);
   } finally { pendingSource.value = undefined; }
 }
@@ -779,20 +785,61 @@ async function saveSourceRule(source: ReturnType<typeof sourceBlock>["source"], 
   await request("/config-import/save", { method: "POST", body: jsonBody({ ...payload, expected }) });
 }
 async function openSourceRule(entry: SourceEntry) {
-  if (!state.value || busy.value) return;
-  busy.value = true;
-  try {
-    if (openAdvancedParameters(entry)) return;
+  if (entry.file.name.endsWith(".stream")) {
+    const { raw, annotated } = formSourceBlock(entry);
+    const form = annotated
+      ? await request<ConfigForm>("/config-form", {method:"POST",body:jsonBody({content:raw})})
+      : await matchSavedConfig(raw, state.value!, entry.line);
+    if (form?.kind !== "streams") throw Error("此配置无法完整还原为 TCP/UDP 规则表单");
+    streamEditor.value?.show(form.value, entry);
+  } else {
     const {source, rule, annotated} = await inspectSource(entry);
+    if (page.value !== "rules" || modal.value) return;
     openRule(rule);
+    ruleSourceEntry.value = entry;
     annotatedHTTPSource.value = annotated;
     sourceReplacement.value = source;
+  }
+  sourceEditorEntry.value = undefined;
+}
+async function editHTTPSource(entry: SourceEntry) {
+  if (busy.value) return;
+  sourceFormIssue.value = "";
+  if (entry.error) {
+    sourceEditorEntry.value = entry;
+    return;
+  }
+  busy.value = true;
+  try {
+    await openSourceRule(entry);
   } catch (error) {
-    if (!(error instanceof UnsupportedFormError && openAdvancedParameters(entry, true))) await openSourceError(entry, error);
-  } finally { busy.value = false; }
+    if (page.value === "rules" && !modal.value) {
+      sourceFormIssue.value = "无法打开规则表单：" + errorMessage(error);
+      sourceEditorEntry.value = entry;
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+const ruleForm = ref<InstanceType<typeof RuleForm>>();
+const ruleParametersButton = ref<HTMLButtonElement>();
+async function closeSourceEditor() {
+  sourceEditorEntry.value = undefined;
+  if (modal.value === "rule") {
+    await nextTick();
+    ruleParametersButton.value?.focus();
+  }
+}
+async function openRuleParameters() {
+  const entry = ruleSourceEntry.value;
+  if (!entry || busy.value) return;
+  if (ruleForm.value?.hasEdits() && !await ask("切换编辑方式", "参数与源码显示已保存的配置。返回表单可继续当前修改；保存参数或源码将结束本次表单编辑。是否继续？")) return;
+  sourceFormIssue.value = "";
+  sourceEditorEntry.value = entry;
 }
 function openRule(rule: ProxyRule | null = null) {
   sourceReplacement.value = undefined;
+  ruleSourceEntry.value = undefined;
   annotatedHTTPSource.value = false;
   editingRule.value = rule;
   newRuleGroup.value = selectedGroup.value === "all" ? "" : selectedGroup.value;
@@ -831,23 +878,25 @@ async function saveRule(value: ProxyRuleInput, applyAfter: boolean) {
         method: "PUT", body: jsonBody({ name: source.name, content, expected_content: source.expected }),
       });
       sourceReplacement.value = { ...source, expected: file.content, end };
+      if (ruleSourceEntry.value) {
+        const entry = ruleSourceEntry.value;
+        const index = sourceEntries([entry.file]).findIndex(item => item.start === entry.start);
+        ruleSourceEntry.value = sourceEntries([file])[index];
+      }
     } else {
       editingRule.value = await saveObject<ProxyRule>("/rules", id ?? "", value);
     }
     persisted = true;
     if (applyAfter) {
       try {
-        await request("/apply", {
-          method: "POST",
-          body: jsonBody({ summary: `${id ? "修改" : "新增"}规则：${value.name}` }),
-        });
+        await applyDraft(`${id ? "修改" : "新增"}规则：${value.name}`, "规则已保存并应用");
       } catch (e) { throw new Error(`规则已保存，但应用失败：${errorMessage(e)}。修正后可再次保存并应用。`); }
     }
     return true;
   });
   if (saved) {
     modal.value = null;
-    toast(applyAfter ? "规则已保存并应用" : "规则已保存为草稿", "success");
+    if (!applyAfter) toast("规则已保存为草稿", "success");
   }
   if (persisted) await loadCore(true);
 }
@@ -890,15 +939,11 @@ async function deleteRule(rule: ProxyRule) {
       await request(`/rules/${rule.id}`, { method: "DELETE" });
       deleted = true;
       try {
-        return await request<ApplyResult>("/apply", {
-          method: "POST",
-          body: jsonBody({ summary: `删除规则：${rule.name}` }),
-        });
+        return await applyDraft(`删除规则：${rule.name}`, "规则已删除并应用");
       } catch (error) {
         throw new Error(`规则已删除，但应用失败：${errorMessage(error)}。请修正后重新保存并应用。`);
       }
     },
-    "规则已删除并应用",
   );
   if (deleted) await loadCore(true);
 }
@@ -910,14 +955,14 @@ async function toggleRuleEnabled(rule: ProxyRule | StreamRule, enabled: boolean,
   targets[rule.id] = enabled;
   try {
     await mutate(async () => {
-      await request(`/${stream ? "streams" : "rules"}/${rule.id}/enabled`, {
+      const result = await request<ApplyResult>(`/${stream ? "streams" : "rules"}/${rule.id}/enabled`, {
         method: "POST", body: jsonBody({ enabled }),
       });
       // Commit the confirmed flag before the broader overview/state refresh.
       const rules = stream ? state.value?.stream_rules : state.value?.rules;
       const current = rules?.find(item => item.id === rule.id);
       if (current) current.enabled = enabled;
-      toast(`${stream ? "Stream " : ""}规则已${enabled ? "启用" : "停用"}并立即生效`, "success");
+      reportActivation(result, `${stream ? "Stream " : ""}规则已${enabled ? "启用" : "停用"}并立即生效`);
       await loadCore(true);
       return true;
     });
@@ -1009,10 +1054,7 @@ async function applySettings(value: Settings) {
   try {
     await request("/settings", { method: "PUT", body: jsonBody(value) });
     saved = true;
-    const result = await request<ApplyResult>("/apply", {
-      method: "POST", body: jsonBody({ summary: "保存并应用全局设置" }),
-    });
-    toast(result.message || "设置已保存并应用", "success");
+    await applyDraft("保存并应用全局设置");
   } catch (error) {
     toast((saved ? "设置已保存为草稿，但应用失败：" : "") + errorMessage(error), "error");
   } finally {
@@ -1049,9 +1091,8 @@ async function saveAndApplyResource<T>(path: string, value: object, id: string, 
   let saved: T | undefined;
   try {
     saved = await saveObject<T>(path, id, value);
-    await request("/apply", { method: "POST", body: jsonBody({ summary: `保存并应用${label}` }) });
+    await applyDraft(`保存并应用${label}`, `${label}已保存并应用`);
     done(saved);
-    toast(`${label}已保存并应用`, "success");
   } catch (error) {
     done(saved, saved ? `${label}已保存，但应用失败：${errorMessage(error)}。修正后可再次保存并应用。` : errorMessage(error));
   } finally {
@@ -1093,29 +1134,6 @@ async function removeRateLimitPolicy(policy: RateLimitPolicy) {
   );
   if (ok !== undefined) await loadCore(true);
 }
-function openAdvancedParameters(entry: SourceEntry, fallback = false) {
-  const { raw, annotated } = formSourceBlock(entry);
-  const scope = entry.file.name.endsWith(".stream") ? "stream" : "http";
-  if (annotated || !menuEnabled("config")) return false;
-  const nodes = parseConfig(raw);
-  if (!fallback && nodes[0].children?.some(n => n.words[0] === "set" && n.words[1] === "$fnproxy_rule_id")) return false;
-  if (!sourceImportMode(nodes, scope, fallback)) return false;
-  parameterEntry.value = entry;
-  return true;
-}
-async function editStreamSource(entry: SourceEntry) {
-  try {
-    if (openAdvancedParameters(entry)) return;
-    const { raw,annotated } = formSourceBlock(entry);
-    const form = annotated
-      ? await request<ConfigForm>("/config-form", {method:"POST",body:jsonBody({content:raw})})
-      : await matchSavedConfig(raw,state.value!,entry.line);
-    if (form?.kind !== "streams") throw Error("此配置无法完整还原为 TCP/UDP 规则");
-    streamEditor.value?.show(form.value,entry);
-  } catch(e) {
-    if (!(e instanceof UnsupportedFormError && openAdvancedParameters(entry, true))) await openSourceError(entry, e);
-  }
-}
 async function saveStreamRule(value: StreamRuleInput, id: string, entry?: SourceEntry) {
   let saved = false;
   await mutate(
@@ -1130,14 +1148,13 @@ async function saveStreamRule(value: StreamRuleInput, id: string, entry?: Source
       } else await saveObject("/streams", id, value);
       saved = true;
       try {
-        const result = await request<ApplyResult>("/apply", {method:"POST",body:jsonBody({summary:"保存并应用 TCP/UDP 规则"})});
+        const result = await applyDraft("保存并应用 TCP/UDP 规则", "TCP/UDP 规则已保存并应用");
         streamEditor.value?.close();
         return result;
       } catch (error) {
         throw new Error(`规则已保存，但应用失败：${errorMessage(error)}。请修正后重新保存，或到“Nginx 配置”页面重新应用。`);
       }
     },
-    "TCP/UDP 规则已保存并应用",
   );
   if (saved) await loadCore(true);
 }
@@ -1189,7 +1206,7 @@ watch(configTab, () => {
 watch(menuOpen, (value) => document.body.classList.toggle("menu-open", value));
 function keydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
-    if (activePreview.value) return;
+    if (activePreview.value || sourceEditorEntry.value) return;
     if (confirmBox.open) answerConfirm(false);
     else if (rateLimitManagerOpen.value && !busy.value) rateLimitManagerOpen.value = false;
     else closeModal();
@@ -1315,7 +1332,7 @@ onBeforeUnmount(() => {
           <GatewayRoutesPage v-else-if="page === 'gateway'" :routes="state.gateway_routes ?? []" @updated="updateGatewayRoute" :busy="busy" @refresh="loadCore(true)" />
           <template v-else-if="page === 'streams'">
             <StreamRulesPage ref="streamEditor" @import-config="importing=true" @export-config="(id,name)=>previewForm('streams',id,name)" @copy="copyProxyAddress"
-              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="editSource" @source-rule="editStreamSource" @source-saved="sourceSaved" @preview="(r)=>showConfig(r.id,r.name,true)"
+              :rules="state.stream_rules" :sources="sources.filter(s=>s.file.name.endsWith('.stream'))" @source="sourceEditorEntry = $event" @preview="(r)=>showConfig(r.id,r.name,true)"
               :dirty="state.dirty"
               :pending-toggles="streamToggleTargets"
               :pools="state.upstream_pools"
@@ -1385,7 +1402,7 @@ onBeforeUnmount(() => {
               <button class="button ghost" :disabled="!hasRuleFilters" @click="resetRuleFilters">重置筛选</button>
               <span class="filter-count">{{ filteredRules.length + filteredSources.length }} / {{ state.rules.length + httpSources.length }} 条</span>
             </div>
-            <ConfigSources rule-editor :busy="busy || !!pendingSource" :pending="pendingSource" @preview="previewSource" @disable="changeSource($event, false)" @remove="changeSource($event, true)" @rule="openSourceRule" @copy="copyProxyAddress" :entries="filteredSources" @saved="sourceSaved" @edit="editSource" />
+            <ConfigSources rule-editor :busy="busy || !!pendingSource" :pending="pendingSource" @preview="previewSource" @disable="changeSource($event, false)" @remove="changeSource($event, true)" @copy="copyProxyAddress" :entries="filteredSources" @edit="editHTTPSource" />
             <RuleGroups ref="groupPanel" :groups="ruleGroups" :rules="state.rules" :certificates="state.certificates"
               :selected="selectedGroup" :busy="busy" :default-port="state.settings.default_http_port"
               :save="saveRuleGroup" :remove="deleteRuleGroup" @select="selectedGroup = $event" />
@@ -1399,16 +1416,8 @@ onBeforeUnmount(() => {
               </header>
               <div v-show="!collapsedGroups.has(section.id)" :id="`group-rules-${section.id || 'ungrouped'}`">
               <div v-if="section.rules.length" class="table-wrap">
-                <table class="table">
-                  <thead>
-                    <tr>
-                      <th>状态</th>
-                      <th>名称</th>
-                      <th>入口</th>
-                      <th>转发服务</th>
-                      <th></th>
-                    </tr>
-                  </thead>
+                <table class="table http-rule-table">
+                  <HttpRuleTableHead />
                   <tbody>
                     <tr v-for="rule in section.rules" :key="rule.id">
                       <td>
@@ -1417,16 +1426,16 @@ onBeforeUnmount(() => {
                           @change="toggleRule(rule, $event)" />
                       </td>
                       <td>
-                        <div class="rule-name">{{ rule.name }}</div>
+                        <div class="rule-name rule-cell-text" :title="rule.name">{{ rule.name }}</div>
                       </td>
                       <td>
                         <ProxyAddress v-for="domain in rule.domains" :key="domain" :value="formatRuleEntry(rule, domain)" entry
                           :openable="canOpenRuleEntry(domain)" :copy-disabled="domain === '*'" :unsupported="rule.listen_port < minListenPort" @copy="copyProxyAddress" />
-                        <div v-if="!rule.domains.length" :class="{ 'unsupported-entry': rule.listen_port < minListenPort }" :title="rule.listen_port < minListenPort ? '当前版本不支持此监听端口' : undefined">{{ formatRuleEntry(rule) }}</div>
+                        <div v-if="!rule.domains.length" class="rule-cell-text" :class="{ 'unsupported-entry': rule.listen_port < minListenPort }" :title="formatRuleEntry(rule) + (rule.listen_port < minListenPort ? '（当前版本不支持此监听端口）' : '')">{{ formatRuleEntry(rule) }}</div>
                       </td>
                       <td>
                         <ProxyAddress v-if="ruleBackends.get(rule.id)?.address" :value="ruleBackends.get(rule.id)!.label" @copy="copyProxyAddress" />
-                        <span v-else>{{ ruleBackends.get(rule.id)?.label }}</span>
+                        <span v-else class="rule-cell-text" :title="ruleBackends.get(rule.id)?.label">{{ ruleBackends.get(rule.id)?.label }}</span>
                       </td>
                       <td>
                         <div class="table-actions">
@@ -1756,6 +1765,8 @@ onBeforeUnmount(() => {
   <DraftChangesDialog v-if="showDraftPreview && draftChanges" :changes="draftChanges" :return-focus="draftChangesTrigger" @close="closePreview" />
   <RevisionPreview v-else-if="activePreview" :revision="activePreview" @close="closePreview" />
   <ConfigDialog v-if="state && (importing || rulePreview)" :state="state" :open-form="openImportedForm" :custom-config-enabled="menuEnabled('config')" :stream-page="page === 'streams'" :rules="state?.rules ?? []" :preview="rulePreview" @close="importing=false;rulePreview=undefined" @copy="copyProxyAddress" @raw="keepSource" @saved="imported" />
+  <SourceParameterDialog v-if="sourceEditorEntry" :key="sourceEditorEntry.file.name + ':' + sourceEditorEntry.start" :entry="sourceEditorEntry"
+    :block="sourceEditorEntry" :form-issue="page === 'rules' ? sourceFormIssue : ''" :from-rule-form="modal === 'rule'" :open-rule-form="openSourceRule" @close="closeSourceEditor" @saved="finishSourceEdit" />
   <SourceParameterDialog v-if="parameterEntry" :entry="parameterEntry" @close="parameterEntry = undefined" @saved="parameterEntry = undefined; sourceSaved()" />
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">
@@ -1797,7 +1808,7 @@ onBeforeUnmount(() => {
           weight="regular"
           aria-hidden="true"
         />
-        <div>
+        <div :class="{ 'rule-title-row': modal === 'rule' }">
           <h2 :id="`${modal}-title`">
             {{
               modal === "rule"
@@ -1807,8 +1818,11 @@ onBeforeUnmount(() => {
                 : "导入 SSL/TLS 证书"
             }}
           </h2>
+          <NameConflictNotice v-if="modal === 'rule' && editingRule && (ruleSourceEntry || state?.rules.some(r => r.id === editingRule?.id && r.enabled))"
+            :key="editingRule.id" :block="ruleSourceEntry" :rule-id="editingRule.id" />
           <p v-if="modal === 'certificate'">证书链必须与私钥匹配，支持 RSA 和 ECDSA PEM。</p>
         </div>
+        <button v-if="modal === 'rule' && sourceReplacement" ref="ruleParametersButton" type="button" class="button ghost small" :disabled="busy" @click="openRuleParameters">参数与源码</button>
         <button type="button" class="icon-button modal-close" aria-label="关闭" @click="closeModal">
           <PhX :size="20" aria-hidden="true" />
         </button>
@@ -1816,6 +1830,7 @@ onBeforeUnmount(() => {
       <div class="modal-body">
         <RuleForm
           v-if="modal === 'rule'"
+          ref="ruleForm"
           :source-file="sourceReplacement?.name"
           :rule="editingRule"
           :groups="ruleGroups"
@@ -1841,6 +1856,7 @@ onBeforeUnmount(() => {
       </div>
       <footer v-if="modal === 'rule'" class="modal-footer rule-editor-footer">
         <button type="button" class="button ghost" :disabled="busy" @click="closeModal">取消</button>
+        <button v-if="sourceReplacement" type="submit" form="proxy-rule-form" value="draft" class="button secondary" :disabled="busy">保存为草稿</button>
         <button type="submit" form="proxy-rule-form" class="button primary" :disabled="busy">
           {{ busy ? "处理中…" : "保存并应用" }}
         </button>
@@ -1907,6 +1923,12 @@ onBeforeUnmount(() => {
     </section>
   </div>
   <div class="toast-region" aria-live="assertive">
+    <section v-if="conflictNotice" class="toast conflict-notice" aria-label="域名冲突">
+      <header><strong>{{ conflictNotice.message }}，有域名冲突</strong>
+        <button type="button" aria-label="关闭域名冲突提示" @click="conflictNotice = undefined">×</button>
+      </header>
+      <ul><li v-for="(warning, index) in conflictNotice.warnings" :key="index">{{ warning }}</li></ul>
+    </section>
     <div v-for="item in toasts" :key="item.id" class="toast" :class="item.type">
       <b>{{
         item.type === "success" ? "✓" : item.type === "error" ? "!" : "i"

@@ -449,3 +449,42 @@ func TestLocationBufferingOverridesRuleDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestLocationDirectiveArguments(t *testing.T) {
+	loc := domain.LocationSettings{
+		BackendType: "static", StaticPath: "/site",
+		IndexFiles:        []string{"home page.html", "one,two.html"},
+		TryFiles:          []string{"$uri", "$uri/", "=404"},
+		ValidReferers:     []string{"none", "blocked", "~example[0-9]{2,4}"},
+		NativeRefererArgs: true,
+	}
+	render := func() string {
+		t.Helper()
+		var output strings.Builder
+		if err := New(Paths{}).renderHTTPLocation(&output, domain.ProxyRule{}, "/", "prefix", loc, "", nil, 0); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+	output := render()
+	for _, line := range []string{`index "home page.html" one,two.html;`, `valid_referers none blocked "~example[0-9]{2,4}";`} {
+		if !strings.Contains(output, line) {
+			t.Fatalf("missing %q in %s", line, output)
+		}
+	}
+	loc.BackendType = "proxy"
+	loc.UpstreamHost = "127.0.0.1"
+	loc.UpstreamPort = 8080
+	loc.Cache.Enabled = true
+	loc.Cache.Bypass = []string{"$arg_one", "$cookie_token,suffix", "has space"}
+	for _, directive := range []string{"proxy_cache_bypass", "proxy_no_cache"} {
+		if !strings.Contains(render(), directive+` $arg_one $cookie_token,suffix "has space";`) {
+			t.Fatalf("wrong argument boundaries for %s", directive)
+		}
+	}
+	loc.NativeRefererArgs = false
+	loc.ValidReferers = []string{"none blocked server_names"}
+	if !strings.Contains(render(), "valid_referers none blocked server_names;") {
+		t.Fatal("legacy raw referer fragment lost its argument boundaries")
+	}
+}

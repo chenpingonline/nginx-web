@@ -227,7 +227,8 @@ test("import extended path matches, access lists, filters and DAV defaults", () 
 });
 
 test("Try Files accepts Nginx arguments and legacy commas, preserving quoted filenames", async () => {
-  const {parseTryFiles, formatTryFiles} = await import("../src/tryFiles.ts");
+  const {parseDirectiveArguments, formatDirectiveArguments: formatTryFiles} = await import("../src/nginxConfig.ts");
+  const parseTryFiles = input => parseDirectiveArguments(input, "try_files");
   const spa = ["$uri", "$uri/", "/index.html"];
   assert.deepEqual(parseTryFiles("$uri $uri/ /index.html"), spa);
   assert.deepEqual(parseTryFiles("$uri, $uri/, /index.html"), spa);
@@ -235,7 +236,7 @@ test("Try Files accepts Nginx arguments and legacy commas, preserving quoted fil
   const paths = ["/one two", "/a,b", "/a'b", '/a"b', "/a\\b", "=404"];
   assert.deepEqual(parseTryFiles(formatTryFiles(paths)), paths);
   assert.throws(() => parseTryFiles("$uri"), /回退/);
-  assert.throws(() => parseTryFiles('$uri "missing'), /引号/);
+  assert.throws(() => parseTryFiles('$uri "missing'), /未闭合/);
 });
 
 test("resolve declared HTTP pools without losing the original Host or URI", () => {
@@ -289,7 +290,7 @@ test("restore independent effective buffering for each location and standalone f
   assert.throws(() => importBlocks(raw.replace("on;", "on; proxy_request_buffering off;"), "target"), /proxy_request_buffering/);
 });
 
-test("convert wildcard listeners, older TLS HTTP/2 syntax and integral MiB request limits", () => {
+test("convert wildcard listeners, older TLS HTTP/2 syntax and native request limits", () => {
   const cert = "/cert/abcdefabcdef/";
   const config = `server {listen *:19443 ssl http2; listen [::]:19443 ssl http2; server_name site.test;
     ssl_certificate ${cert}fullchain.pem; ssl_certificate_key ${cert}privkey.pem;
@@ -297,8 +298,15 @@ test("convert wildcard listeners, older TLS HTTP/2 syntax and integral MiB reque
   const rule = importBlocks(config, "").rules[0];
   assert.equal(rule.listen_type, "dual");
   assert.equal(rule.http2, true);
+  assert.equal(rule.client_max_body_size, "2048k");
   assert.equal(rule.client_max_body_mb, 2);
-  assert.throws(() => importBlocks(config.replace("2048k", "512k"), ""), /client_max_body_size/);
+  for (const token of ["512k", "512K", "524288", "1", "1G", "0k", "0008k"]) {
+    assert.equal(importBlocks(config.replace("2048k", token), "").rules[0].client_max_body_size, token);
+  }
+  assert.equal(importBlocks(config.replace("2048k", "0"), "").rules[0].client_max_body_mb, 0);
+  for (const invalid of ["512kb", "-1", "101g"]) {
+    assert.throws(() => importBlocks(config.replace("2048k", invalid), ""), /client_max_body_size/);
+  }
   assert.throws(() => importBlocks(config.replace("[::]:19443 ssl http2", "[::]:19443 ssl"), ""), /listen/);
 });
 
@@ -325,7 +333,8 @@ test("literal punctuation inside an unquoted filename keeps its original argumen
   assert.equal(editParameters(raw, fields), raw);
   assert.deepEqual(parseConfig(`if ($arg_x = "a b") {return 204;}`)[0].words, ["if", "($arg_x", "=", "a b", ")"]);
   assert.throws(() => parseConfig('include "one"two;'));
-  const {parseTryFiles} = await import("../src/tryFiles.ts");
+  const {parseDirectiveArguments} = await import("../src/nginxConfig.ts");
+  const parseTryFiles = input => parseDirectiveArguments(input, "try_files");
   assert.deepEqual(parseTryFiles("/O'Reilly.html =404"), ["/O'Reilly.html", "=404"]);
 });
 
@@ -343,4 +352,34 @@ test("list the backends of conditional and nested locations under their own rout
   assert.deepEqual(site.targets, ["http://beta", "http://stable", "unix:/run/api.sock", "http://writer"]);
   assert.deepEqual(site.routes, ["location /api → http://beta → http://stable", "location /api/php → unix:/run/api.sock",
     "location /write → http://writer", "location /files"]);
+});
+
+test("native list fields keep argument boundaries and repeated access directives", async () => {
+  const {parseDirectiveArguments: parse, formatDirectiveArguments: format} = await import("../src/nginxConfig.ts");
+  const index = ["home page.html", "comma,name.html", "/fallback"];
+  assert.deepEqual(parse('index "home page.html" comma,name.html /fallback;', "index"), index);
+  assert.deepEqual(parse(format(index), "index"), index);
+  assert.deepEqual(parse("allow 192.0.2.1;\nallow 10.0.0.0/8;", "allow", true), ["192.0.2.1", "10.0.0.0/8"]);
+  assert.throws(() => parse("allow 10.0.0.1 all;", "allow", true));
+  assert.throws(() => parse("allow all; deny all;", "allow", true));
+  assert.deepEqual(parse('valid_referers none blocked "~example[0-9]{2,4}";', "valid_referers"), ["none","blocked","~example[0-9]{2,4}"]);
+  assert.deepEqual(parse('$uri,v /fallback', "try_files"), ["$uri,v", "/fallback"]);
+  assert.deepEqual(parse('$arg_x "$cookie_session,suffix"', "proxy_cache_bypass"), ["$arg_x", "$cookie_session,suffix"]);
+  assert.deepEqual(parse("PUT DELETE MKCOL", "dav_methods"), ["PUT","DELETE","MKCOL"]);
+});
+
+test("native units and equivalent imported fields retain the exact represented value", async () => {
+  const {parseQuantity, formatQuantity} = await import("../src/nginxQuantity.ts");
+  for (const [text, unit, value] of [
+    ["1h 30m", "seconds", 5400], ["1m30s", "seconds", 90], ["3000ms","seconds",3],
+    ["2h","minutes",120], ["120","minutes",2], ["2048K","mib",2], ["1048576","mib",1], ["4k","bytes",4096],
+  ]) {
+    assert.equal(parseQuantity(text,unit), value);
+    assert.equal(parseQuantity(formatQuantity(value,unit),unit), value);
+  }
+  for (const [text, unit] of [["500ms","seconds"],["512k","mib"],["1m1h","seconds"],["1k!","kib"],["","seconds"]]) {
+    assert.throws(() => parseQuantity(text,unit));
+  }
+  const loc = importBlocks("location /api { proxy_pass http://127.0.0.1:80; proxy_read_timeout 1m30s; }", "target").location;
+  assert.equal(loc.settings.read_timeout_seconds,90);
 });

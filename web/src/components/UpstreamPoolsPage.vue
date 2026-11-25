@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import PoolPathExample from "./PoolPathExample.vue";
 import AppSelect from "./AppSelect.vue";
 import HelpHint from "./HelpHint.vue";
@@ -260,10 +261,9 @@ defineExpose({ show });
               max="100"
               aria-label="最大失败次数"
               title="最大失败次数"
-            /><input
-              v-model.number="server.fail_timeout_seconds"
+            /><NginxQuantityInput unit="seconds"
+              v-model="server.fail_timeout_seconds"
               class="input"
-              type="number"
               min="1"
               max="86400"
               aria-label="故障恢复时间（秒）"
@@ -309,20 +309,18 @@ defineExpose({ show });
           </div>
           <div class="field">
             <label>单连接最长时间（秒）</label
-            ><input
-              v-model.number="form.keepalive_time_seconds"
+            ><NginxQuantityInput unit="seconds"
+              v-model="form.keepalive_time_seconds"
               class="input"
-              type="number"
               min="1"
               max="86400"
             />
           </div>
           <div class="field">
-            <label>空闲超时（秒）</label
-            ><input
-              v-model.number="form.keepalive_timeout_seconds"
+            <label>空闲超时</label
+            ><NginxQuantityInput unit="seconds"
+              v-model="form.keepalive_timeout_seconds"
               class="input"
-              type="number"
               min="1"
               max="3600"
             />

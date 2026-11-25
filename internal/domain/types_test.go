@@ -162,3 +162,26 @@ func TestLegacyProxyPathCanBeCleared(t *testing.T) {
 		t.Fatal("cleared path was restored")
 	}
 }
+
+func TestRequestBodySize(t *testing.T) {
+	for _, tc := range []struct {
+		native string
+		legacy int
+		want   string
+	}{
+		{"", 0, "0"}, {"", 13, "13m"}, {"512k", 0, "512k"}, {"512K", 1, "512K"},
+		{"2048k", 2, "2048k"}, {"524288", 0, "524288"}, {"0008k", 0, "0008k"},
+		{"0", 8, "0"}, {"0M", 0, "0M"}, {"100G", 0, "100G"},
+	} {
+		rule := ProxyRule{ClientMaxBodySize: tc.native, ClientMaxBodyMB: tc.legacy}
+		got, err := rule.RequestBodySize()
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %q, %v", tc, got, err)
+		}
+	}
+	for _, invalid := range []string{"-1", "+1", "512kb", "1.5m", "101g", "107374182401", "18446744073709551615G", "1; extra", "k"} {
+		if _, err := (ProxyRule{ClientMaxBodySize: invalid}).RequestBodySize(); err == nil {
+			t.Errorf("accepted %q", invalid)
+		}
+	}
+}

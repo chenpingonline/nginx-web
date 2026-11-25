@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import NginxListInput from "./NginxListInput.vue";
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import { minListenPort, listenPortHelp } from "../permissionMode";
 import RuleEditorTabs from "./RuleEditorTabs.vue";
 import { useRuleEditorTabs } from "../composables/useRuleEditorTabs";
@@ -16,6 +18,7 @@ import type {
   Settings,
   UpstreamPool,
 } from "../types";
+import { formatQuantity, requestBodySizeFields } from "../nginxQuantity";
 import { formatDate } from "../utils";
 import LocationSettingsEditor from "./LocationSettingsEditor.vue";
 import AuthProfileManager from "./AuthProfileManager.vue";
@@ -50,7 +53,6 @@ const editorTabs = computed(() => [
   { id: "security", label: "安全与限制" },
   { id: "proxy", label: "代理与超时" },
 ]);
-const domains = ref("");
 const authError = ref("");
 function defaultLocation(): LocationSettings {
   return {
@@ -99,6 +101,21 @@ const form = reactive<ProxyRuleInput>({
   root_location: defaultLocation(),
   locations: [],
 });
+const bodySizeText = ref("0");
+let initialSourceValues = "";
+function sourceValues() { return JSON.stringify([form, bodySizeText.value]); }
+defineExpose({ hasEdits: () => props.sourceFile && sourceValues() !== initialSourceValues });
+const unlimitedBodySize = computed(() => /^0+[kKmMgG]?$/.test(bodySizeText.value));
+function updateBodySize(event: Event) {
+  const input = event.target as HTMLInputElement;
+  bodySizeText.value = input.value;
+  try {
+    Object.assign(form, requestBodySizeFields(input.value.trim()));
+    input.setCustomValidity("");
+  } catch (error) {
+    input.setCustomValidity((error as Error).message);
+  }
+}
 const activePaths = computed(() => [
   { ...form.root_location, upstream_scheme: form.upstream_scheme },
   ...form.locations.filter(location => location.enabled).map(location => location.settings),
@@ -209,6 +226,8 @@ watch(
         locations: [],
       },
     );
+    form.client_max_body_size = rule?.client_max_body_size;
+    bodySizeText.value = form.client_max_body_size ?? formatQuantity(form.client_max_body_mb, "mib");
     form.rate_limit = {
       enabled: false,
       requests_per_second: 20,
@@ -243,7 +262,8 @@ watch(
     form.group_id = rule?.group_id ?? (rule ? "" : props.initialGroup);
     form.inherit_fields = rule ? [...(rule.inherit_fields ?? [])] : form.group_id ? inheritanceOptions.map(o => o.key) : [];
     syncInherited();
-    domains.value = (rule?.domains ?? []).join("\n");
+    form.domains = [...(rule?.domains ?? [])];
+    if (props.sourceFile) initialSourceValues = sourceValues();
   },
   { immediate: true },
 );
@@ -299,7 +319,7 @@ function pasteBackendAddress(event: ClipboardEvent) {
   event.preventDefault();
   applyBackendAddress(parsed);
 }
-function submit() {
+function submit(event: SubmitEvent) {
   if (form.authentication.enabled && !form.authentication.profile_id) {
     activeTab.value = "security";
     authError.value = "启用认证时必须选择认证策略。";
@@ -316,8 +336,8 @@ function submit() {
   });
   emit(
     "save",
-    { ...form, domains: domains.value.split(/[\s,]+/).filter(Boolean) },
-    true,
+    { ...form },
+    event.submitter?.getAttribute("value") !== "draft",
   );
 }
 function createLocationID() {
@@ -363,15 +383,18 @@ async function addLocation() {
         </template>
         <template v-else>
           <label for="rule-group">所属分组</label>
-          <AppSelect id="rule-group" v-model="ruleGroup" class="select">
-            <option value="">未分组</option>
-            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
-          </AppSelect>
+          <div class="rule-group-controls">
+            <AppSelect id="rule-group" v-model="ruleGroup" class="select">
+              <option value="">未分组</option>
+              <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+            </AppSelect>
+            <div class="checkbox-row rule-enabled" title="启用或停用此规则">
+              <input id="rule-enabled" v-model="form.enabled" type="checkbox" aria-label="启用此规则" />
+              <label for="rule-enabled">启用</label>
+            </div>
+          </div>
         </template>
       </div>
-      <label v-if="!sourceFile" class="checkbox-row rule-enabled" title="启用或停用此规则">
-        <input v-model="form.enabled" type="checkbox" aria-label="启用此规则" />启用
-      </label>
     </div>
       <div v-if="selectedGroup" class="field-help group-inheritance full">
         <span>继承分组设置（取消勾选可自定义）：</span>
@@ -384,13 +407,13 @@ async function addLocation() {
     <div class="field full section-content"><label class="field-label-with-help">监听类型<HelpHint text="IPv6 入口可以转发到 IPv4 后端；需放行对应端口。" /></label><ListenTypePicker v-model="form.listen_type" :disabled="inherits('listen_type')" /></div>
     <div class="field full section-content entry-domain-field">
       <label for="rule-domains">域名 / IP</label
-      ><textarea
+      ><NginxListInput
         id="rule-domains"
-        v-model="domains"
+        v-model="form.domains" directive="server_name" multiline
         class="textarea"
         required
-        placeholder="每行一个域名或 IP，* 表示默认站点。&#10;例如：www.example.com、192.168.1.10"
-      ></textarea>
+        placeholder="www.example.com example.com（* 表示默认站点）"
+      />
     </div>
     <div class="field section-content section-left">
       <label for="listen-port" class="field-label-with-help">监听端口<HelpHint :text="listenPortHelp" /></label
@@ -549,17 +572,15 @@ async function addLocation() {
     <div class="form-section"><span>规则公共设置</span><small>默认路径与自定义路径共用</small></div>
     <section class="rule-settings-panel" aria-label="规则公共设置">
     <div class="field section-content section-right body-limit-field">
-      <label for="body-limit">请求体（MB）</label
+      <label for="body-limit">请求体</label
       ><div class="body-limit-control"><input
         id="body-limit"
-        v-model.number="form.client_max_body_mb"
+        :value="bodySizeText" @input="updateBodySize" required
+        placeholder="512k"
         class="input"
-        type="number"
-        min="0"
-        max="102400"
-        :class="{ 'has-unlimited-hint': form.client_max_body_mb === 0 }"
+        :class="{ 'has-unlimited-hint': unlimitedBodySize }"
         aria-description="0 表示不限制"
-      /><span v-if="form.client_max_body_mb === 0" class="body-limit-hint" aria-hidden="true">0 表示不限制</span></div>
+      /><span v-if="unlimitedBodySize" class="body-limit-hint" aria-hidden="true">0 表示不限制</span></div>
     </div>
       <div class="settings-subheading full">访问认证</div>
 
@@ -624,31 +645,28 @@ async function addLocation() {
       <div class="settings-subheading full">后端超时</div>
 
     <div class="field section-content section-left">
-      <label class="field-label-with-help">连接超时 (s)<HelpHint text="与后端服务器建立连接的等待时间。" /></label
-      ><input
-        v-model.number="form.connect_timeout_seconds"
+      <label class="field-label-with-help">连接超时<HelpHint text="与后端服务器建立连接的等待时间。" /></label
+      ><NginxQuantityInput unit="seconds"
+        v-model="form.connect_timeout_seconds"
         class="input"
-        type="number"
         min="1"
         max="600"
       />
     </div>
     <div class="field section-content section-right">
-      <label class="field-label-with-help">读取超时 (s)<HelpHint text="从后端读取响应时，相邻两次读取之间的最长等待时间，不是整个请求的总耗时。" /></label
-      ><input
-        v-model.number="form.read_timeout_seconds"
+      <label class="field-label-with-help">读取超时<HelpHint text="从后端读取响应时，相邻两次读取之间的最长等待时间，不是整个请求的总耗时。" /></label
+      ><NginxQuantityInput unit="seconds"
+        v-model="form.read_timeout_seconds"
         class="input"
-        type="number"
         min="1"
         max="86400"
       />
     </div>
     <div class="field section-content section-left">
-      <label class="field-label-with-help">发送超时 (s)<HelpHint text="向后端发送请求时，相邻两次写入之间的最长等待时间，不是整个请求的总耗时。" /></label
-      ><input
-        v-model.number="form.send_timeout_seconds"
+      <label class="field-label-with-help">发送超时<HelpHint text="向后端发送请求时，相邻两次写入之间的最长等待时间，不是整个请求的总耗时。" /></label
+      ><NginxQuantityInput unit="seconds"
+        v-model="form.send_timeout_seconds"
         class="input"
-        type="number"
         min="1"
         max="86400"
       />
@@ -684,7 +702,7 @@ async function addLocation() {
 </template>
 
 <style scoped>
-#proxy-rule-form .entry-domain-field .textarea { max-width: 520px; }
+#rule-domains { max-width: none; }
 
 .target-service-fields { column-gap: 28px; }
 .rule-modal .rule-form-grid .rule-settings-panel[aria-label="反向代理设置"] > .field .input { width: 100%; }
@@ -702,19 +720,19 @@ async function addLocation() {
 .path-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .path-summary strong { color: var(--accent); }
 .path-summary span, .path-summary small { color: var(--text-muted); font-size: 13px; }
-.rule-enabled { align-self: center; white-space: nowrap; }
+.rule-group-controls { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.rule-enabled { flex: none; white-space: nowrap; }
+.rule-enabled input { margin: 0; }
 .field-label-with-help { gap: 6px; width: fit-content; }
-#proxy-rule-form .rule-basics-row { grid-column: 1 / -1; width: min(100%, 780px); justify-self: center; display: grid; grid-template-columns: minmax(0, 372px) minmax(0, 274px); justify-content: start; align-items: center; gap: 8px 36px; }
+#proxy-rule-form .rule-basics-row { grid-column: 1 / -1; width: min(100%, 780px); justify-self: center; display: grid; grid-template-columns: minmax(0, 372px) minmax(0, 1fr); justify-content: start; align-items: center; gap: 8px 36px; }
 #proxy-rule-form .rule-basics-row > .field { display: grid; grid-template-columns: 104px minmax(0, 1fr); column-gap: 8px; align-items: center; }
 #proxy-rule-form .rule-basics-row > .field > label { justify-content: flex-end; color: var(--text); font-weight: 600; }
 #proxy-rule-form .rule-basics-row > .rule-group-field { grid-template-columns: max-content minmax(0, 1fr); }
-#proxy-rule-form .rule-enabled { justify-self: start; margin-left: 112px; }
-#proxy-rule-form #rule-group { width: min(100%, 210px); }
+#proxy-rule-form #rule-group { flex: 0 1 210px; min-width: 0; }
 .rule-basics-row output { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
 @media (max-width: 760px) {
   #proxy-rule-form .rule-basics-row { grid-template-columns: minmax(0, 1fr); }
   #proxy-rule-form .rule-basics-row > .field, #proxy-rule-form .rule-basics-row > .rule-group-field { grid-template-columns: 5em minmax(0, 260px); }
-  #proxy-rule-form .rule-enabled { margin-left: calc(5em + 8px); }
 }
 
 .rule-settings-panel {

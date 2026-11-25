@@ -58,3 +58,16 @@ func (s *AppService) DeleteCustomConfig(name string) error {
 		return errors.New("找不到指定自定义配置文件")
 	})
 }
+
+func (s *AppService) SourceWarnings(file, expected string, line, occurrence int) ([]string, error) {
+	state := s.store.Snapshot()
+	for _, config := range state.CustomConfigs {
+		if config.Name == file {
+			if config.Content != expected {
+				return nil, errors.New("来源配置已变更，请刷新后重新编辑")
+			}
+			return s.nginx.SourceWarnings(state, file, line, occurrence)
+		}
+	}
+	return nil, errors.New("自定义配置文件不存在")
+}

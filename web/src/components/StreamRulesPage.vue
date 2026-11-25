@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import NginxListInput from "./NginxListInput.vue";
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import { minListenPort } from "../permissionMode";
 import RuleEditorTabs from "./RuleEditorTabs.vue";
 import { useRuleEditorTabs } from "../composables/useRuleEditorTabs";
@@ -41,8 +43,6 @@ const emit = defineEmits<{
   refresh: [];
   preview:[rule:StreamRule];
   source:[entry:SourceEntry];
-  sourceRule:[entry:SourceEntry];
-  sourceSaved: [];
 }>();
 const search = ref("");
 const protocolFilter = ref<"all" | "tcp" | "udp">("all");
@@ -73,10 +73,7 @@ const editorTabs = [
   { id: "security", label: "安全与日志" },
 ];
 const open = ref(false),
-  editing = ref<StreamRule | null>(null),
-  trustedText = ref(""),
-  allowText = ref(""),
-  denyText = ref("");
+  editing = ref<StreamRule | null>(null);
 const blankRoute = (): SNIRoute => ({
   server_names: [],
   upstream_pool_id: "",
@@ -118,11 +115,8 @@ function show(rule: StreamRule | null = null, source?: SourceEntry) {
   form.allow ??= [];
   form.deny ??= [];
   form.sni_routes ??= [];
-  trustedText.value = form.trusted_proxies.join("\n");
-  allowText.value = form.allow.join("\n");
-  denyText.value = form.deny.join("\n");
   routeNames.value = form.sni_routes.map((route) =>
-    (route.server_names ?? []).join(", "),
+    (route.server_names ?? []).join(" "),
   );
   open.value = true;
 }
@@ -136,9 +130,6 @@ function removeRoute(index: number) {
 }
 function submit() {
   const value = structuredClone(toRaw(form));
-  value.trusted_proxies = trustedText.value.split(/[\s,]+/).filter(Boolean);
-  value.allow = allowText.value.split(/[\s,]+/).filter(Boolean);
-  value.deny = denyText.value.split(/[\s,]+/).filter(Boolean);
   value.sni_routes = value.sni_routes.map((route, index) => ({
     ...route,
     server_names: (routeNames.value[index] ?? "")
@@ -258,7 +249,7 @@ defineExpose({ show, close: () => { open.value = false; } });
       <p>{{ rules.length ? "调整关键词、协议或启用状态后重试。" : "创建独立监听端口并转发到单节点服务或 Stream 转发服务组。" }}</p>
     </div>
   </article>
-  <ConfigSources stream-editor @rule="emit('sourceRule',$event)" @copy="(value, label) => emit('copy', value, label)" :entries="visibleSources" @saved="emit('sourceSaved')" @edit="emit('source',$event)" />
+  <ConfigSources :busy="busy" @copy="(value, label) => emit('copy', value, label)" :entries="visibleSources" @edit="emit('source',$event)" />
   <Teleport to="body">
     <div v-if="open" class="modal-backdrop" @mousedown.self="open = false">
       <section
@@ -361,29 +352,27 @@ defineExpose({ show, close: () => { open.value = false; } });
           </div>
           <div class="field full">
             <label>可信代理</label
-            ><textarea
-              v-model="trustedText"
+            ><NginxListInput
+              v-model="form.trusted_proxies" directive="set_real_ip_from" repeated
               class="textarea"
               placeholder="仅在接收 PROXY Protocol 时填写"
-            ></textarea>
+             />
           </div>
 
           <div class="field">
-            <label>连接超时（秒）</label
-            ><input
-              v-model.number="form.connect_timeout_seconds"
+            <label>连接超时</label
+            ><NginxQuantityInput unit="seconds"
+              v-model="form.connect_timeout_seconds"
               class="input"
-              type="number"
               min="1"
               max="600"
             />
           </div>
           <div class="field">
-            <label>会话超时（秒）</label
-            ><input
-              v-model.number="form.proxy_timeout_seconds"
+            <label>会话超时</label
+            ><NginxQuantityInput unit="seconds"
+              v-model="form.proxy_timeout_seconds"
               class="input"
-              type="number"
               min="1"
               max="86400"
             />
@@ -439,7 +428,7 @@ defineExpose({ show, close: () => { open.value = false; } });
                 v-model="routeNames[index]"
                 class="input"
                 required
-                placeholder="域名，多个用逗号分隔"
+                placeholder="app.example.com api.example.com"
               /><AppSelect v-model="route.upstream_pool_id" class="select">
                 <option value="">单个目标</option>
                 <option
@@ -503,11 +492,11 @@ defineExpose({ show, close: () => { open.value = false; } });
           </div>
           <div class="field">
             <label>允许来源</label
-            ><textarea v-model="allowText" class="textarea"></textarea>
+            ><NginxListInput v-model="form.allow" directive="allow" repeated class="textarea" />
           </div>
           <div class="field">
             <label>拒绝来源</label
-            ><textarea v-model="denyText" class="textarea"></textarea>
+            ><NginxListInput v-model="form.deny" directive="deny" repeated class="textarea" />
           </div>
           </section>
           </div>

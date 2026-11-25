@@ -7,6 +7,7 @@ import (
 	"net"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,6 +68,7 @@ type ProxyRule struct {
 	ConnectTimeoutSeconds int                `json:"connect_timeout_seconds"`
 	ReadTimeoutSeconds    int                `json:"read_timeout_seconds"`
 	SendTimeoutSeconds    int                `json:"send_timeout_seconds"`
+	ClientMaxBodySize     string             `json:"client_max_body_size,omitempty"`
 	ClientMaxBodyMB       int                `json:"client_max_body_mb"`
 	UpstreamPoolID        string             `json:"upstream_pool_id,omitempty"`
 	RateLimitPolicyID     string             `json:"rate_limit_policy_id,omitempty"`
@@ -144,9 +146,10 @@ type NginxStatus struct {
 }
 
 type ApplyResult struct {
-	Action  string `json:"action"`
-	Message string `json:"message"`
-	Output  string `json:"output,omitempty"`
+	Action   string   `json:"action"`
+	Message  string   `json:"message"`
+	Output   string   `json:"output,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func DefaultState() State {
@@ -260,6 +263,43 @@ func NormalizeRule(rule *ProxyRule, settings Settings) {
 	}
 }
 
+// RequestBodySize preserves the native token. Older records store whole MiB.
+func (rule ProxyRule) RequestBodySize() (string, error) {
+	const maxMiB = 102400
+	rangeError := errors.New("请求体上限必须为 0 到 100g，0 表示不限制")
+	if rule.ClientMaxBodyMB < 0 || rule.ClientMaxBodyMB > maxMiB {
+		return "", rangeError
+	}
+	token := rule.ClientMaxBodySize
+	if token == "" {
+		if rule.ClientMaxBodyMB == 0 {
+			return "0", nil
+		}
+		return strconv.Itoa(rule.ClientMaxBodyMB) + "m", nil
+	}
+	digits := token
+	var unit uint64 = 1
+	switch token[len(token)-1] {
+	case 'k', 'K':
+		unit = 1 << 10
+	case 'm', 'M':
+		unit = 1 << 20
+	case 'g', 'G':
+		unit = 1 << 30
+	}
+	if unit != 1 {
+		digits = digits[:len(digits)-1]
+	}
+	amount, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil {
+		return "", errors.New("请求体上限应为字节数或带 k、m、g 单位的整数")
+	}
+	if amount > (maxMiB<<20)/unit {
+		return "", rangeError
+	}
+	return token, nil
+}
+
 func ValidateRule(rule ProxyRule, certs map[string]CertificateMeta, pools ...map[string]UpstreamPool) error {
 	if err := ValidateListenType(rule.ListenType); err != nil {
 		return err
@@ -338,8 +378,8 @@ func ValidateRule(rule ProxyRule, certs map[string]CertificateMeta, pools ...map
 	if rule.SendTimeoutSeconds < 1 || rule.SendTimeoutSeconds > 86400 {
 		return errors.New("发送超时必须为 1 到 86400 秒")
 	}
-	if rule.ClientMaxBodyMB < 0 || rule.ClientMaxBodyMB > 102400 {
-		return errors.New("请求体上限必须为 0 到 102400 MB，0 表示不限制")
+	if _, err := rule.RequestBodySize(); err != nil {
+		return err
 	}
 	if err := validateRateLimit(rule.RateLimit); err != nil {
 		return err

@@ -142,16 +142,16 @@ func (m *Manager) TestCurrent() (string, error) {
 	return m.testConfigUnlocked(m.paths.NginxMaster)
 }
 
-func (m *Manager) Start() (ApplyResult, error) {
+func (m *Manager) Start(rules ...ProxyRule) (ApplyResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.startUnlocked()
+	return m.startUnlocked(rules...)
 }
 
-func (m *Manager) Reload() (ApplyResult, error) {
+func (m *Manager) Reload(rules ...ProxyRule) (ApplyResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.reloadUnlocked()
+	return m.reloadUnlocked(rules...)
 }
 
 func (m *Manager) Stop() (ApplyResult, error) {
@@ -215,6 +215,37 @@ func (m *Manager) TestState(state State) (string, error) {
 }
 
 func (m *Manager) testStateUnlocked(state State) (string, error) {
+	return m.checkCandidate(state, nil)
+}
+
+// SourceWarnings checks the saved draft, including drafts never applied on this device.
+func (m *Manager) SourceWarnings(state State, file string, line, occurrence int) ([]string, error) {
+	return m.matchingNameWarnings(state, func(s serverSource) bool {
+		return s.file == file && s.line == line && s.occurrence == occurrence
+	})
+}
+
+func (m *Manager) RuleWarnings(state State, id string) ([]string, error) {
+	return m.matchingNameWarnings(state, func(s serverSource) bool { return s.ruleID == id })
+}
+
+func (m *Manager) matchingNameWarnings(state State, matches func(serverSource) bool) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	warnings := []string{}
+	_, err := m.checkCandidate(state, func(output, master, confD string) {
+		for _, conflict := range diagnoseNames(output, master, confD, state.Rules) {
+			if conflict.winner.file == "" {
+				warnings = append(warnings, conflict.message+"尚无法判断是否涉及当前配置块。")
+			} else if matches(conflict.winner) || matches(conflict.ignored) {
+				warnings = append(warnings, conflict.message)
+			}
+		}
+	})
+	return warnings, err
+}
+
+func (m *Manager) checkCandidate(state State, inspect func(output, master, confD string)) (string, error) {
 	state = domain.CloneState(state)
 	if err := domain.ValidateRuntimePorts(state); err != nil {
 		return "", err
@@ -259,6 +290,9 @@ func (m *Manager) testStateUnlocked(state State) (string, error) {
 	output, err := m.testConfigUnlocked(candidateMasterPath)
 	if err != nil {
 		return "", fmt.Errorf("候选配置校验失败: %w\n%s", err, output)
+	}
+	if inspect != nil {
+		inspect(output, candidateMasterPath, candidateConfD)
 	}
 	return output, nil
 }
@@ -340,9 +374,9 @@ func (m *Manager) installStateUnlocked(state State, activate bool) (ApplyResult,
 	_, wasRunning := m.runningPID()
 	var result ApplyResult
 	if wasRunning {
-		result, err = m.reloadUnlocked()
+		result, err = m.reloadUnlocked(state.Rules...)
 	} else {
-		result, err = m.startUnlocked()
+		result, err = m.startUnlocked(state.Rules...)
 	}
 	if err != nil {
 		rollback()
@@ -361,12 +395,13 @@ func (m *Manager) installStateUnlocked(state State, activate bool) (ApplyResult,
 	return result, nil
 }
 
-func (m *Manager) startUnlocked() (ApplyResult, error) {
+func (m *Manager) startUnlocked(rules ...ProxyRule) (ApplyResult, error) {
 	if _, running := m.runningPID(); running {
 		return ApplyResult{Action: "start", Message: "Nginx 已在运行"}, nil
 	}
-	if output, err := m.testConfigUnlocked(m.paths.NginxMaster); err != nil {
-		return ApplyResult{}, fmt.Errorf("启动前配置校验失败: %w\n%s", err, output)
+	validation, err := m.testConfigUnlocked(m.paths.NginxMaster)
+	if err != nil {
+		return ApplyResult{}, fmt.Errorf("启动前配置校验失败: %w\n%s", err, validation)
 	}
 	if err := removeStaleUnixSocket(m.paths.StatusSocket()); err != nil {
 		return ApplyResult{}, fmt.Errorf("清理 Nginx 状态 Socket 失败: %w", err)
@@ -380,7 +415,7 @@ func (m *Manager) startUnlocked() (ApplyResult, error) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if pid, running := m.runningPID(); running {
-			return ApplyResult{Action: "start", Message: fmt.Sprintf("Nginx 已启动，PID %d", pid), Output: strings.TrimSpace(string(output))}, nil
+			return ApplyResult{Action: "start", Message: fmt.Sprintf("Nginx 已启动，PID %d", pid), Output: strings.TrimSpace(string(output)), Warnings: m.nameWarnings(validation, rules)}, nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -417,12 +452,13 @@ func removeStaleUnixSocket(socketPath string) error {
 	return nil
 }
 
-func (m *Manager) reloadUnlocked() (ApplyResult, error) {
+func (m *Manager) reloadUnlocked(rules ...ProxyRule) (ApplyResult, error) {
 	if _, running := m.runningPID(); !running {
-		return m.startUnlocked()
+		return m.startUnlocked(rules...)
 	}
-	if output, err := m.testConfigUnlocked(m.paths.NginxMaster); err != nil {
-		return ApplyResult{}, fmt.Errorf("重载前配置校验失败: %w\n%s", err, output)
+	validation, err := m.testConfigUnlocked(m.paths.NginxMaster)
+	if err != nil {
+		return ApplyResult{}, fmt.Errorf("重载前配置校验失败: %w\n%s", err, validation)
 	}
 	offset := fileutil.FileSize(m.paths.NginxErrorLog)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -440,7 +476,7 @@ func (m *Manager) reloadUnlocked() (ApplyResult, error) {
 	if strings.Contains(lower, "[emerg]") || strings.Contains(lower, "still could not bind") {
 		return ApplyResult{}, fmt.Errorf("Nginx 拒绝了新配置: %s", strings.TrimSpace(newLog))
 	}
-	return ApplyResult{Action: "reload", Message: "Nginx 已平滑重载", Output: strings.TrimSpace(string(output))}, nil
+	return ApplyResult{Action: "reload", Message: "Nginx 已平滑重载", Output: strings.TrimSpace(string(output)), Warnings: m.nameWarnings(validation, rules)}, nil
 }
 
 func (m *Manager) testConfigUnlocked(configPath string) (string, error) {
@@ -1188,11 +1224,11 @@ func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateM
 		fmt.Fprintf(&builder, "    ssl_certificate_key %s;\n", nginxQuote(keyFile))
 	}
 
-	if rule.ClientMaxBodyMB == 0 {
-		builder.WriteString("    client_max_body_size 0;\n")
-	} else {
-		fmt.Fprintf(&builder, "    client_max_body_size %dm;\n", rule.ClientMaxBodyMB)
+	bodySize, err := rule.RequestBodySize()
+	if err != nil {
+		return "", err
 	}
+	fmt.Fprintf(&builder, "    client_max_body_size %s;\n", bodySize)
 
 	if rule.RedirectToHTTPS {
 		targetPort := ""
@@ -1299,7 +1335,11 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		builder.WriteString("        ssi on;\n")
 	}
 	if len(settings.ValidReferers) > 0 {
-		fmt.Fprintf(builder, "        valid_referers %s;\n", strings.Join(settings.ValidReferers, " "))
+		referers := strings.Join(settings.ValidReferers, " ")
+		if settings.NativeRefererArgs {
+			referers = nginxArguments(settings.ValidReferers)
+		}
+		fmt.Fprintf(builder, "        valid_referers %s;\n", referers)
 		if settings.DenyInvalidReferer {
 			builder.WriteString("        if ($invalid_referer) { return 403; }\n")
 		}
@@ -1323,7 +1363,7 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		}
 		fmt.Fprintf(builder, "        %s %s;\n", directive, nginxQuote(settings.StaticPath))
 		if len(settings.IndexFiles) > 0 {
-			fmt.Fprintf(builder, "        index %s;\n", strings.Join(settings.IndexFiles, " "))
+			fmt.Fprintf(builder, "        index %s;\n", nginxArguments(settings.IndexFiles))
 		}
 		if settings.AutoIndex {
 			builder.WriteString("        autoindex on;\n")
@@ -1508,8 +1548,8 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 			fmt.Fprintf(builder, "        proxy_cache_key %s;\n", nginxDirectiveQuote(settings.Cache.Key))
 		}
 		if len(settings.Cache.Bypass) > 0 {
-			fmt.Fprintf(builder, "        proxy_cache_bypass %s;\n", strings.Join(settings.Cache.Bypass, " "))
-			fmt.Fprintf(builder, "        proxy_no_cache %s;\n", strings.Join(settings.Cache.Bypass, " "))
+			fmt.Fprintf(builder, "        proxy_cache_bypass %s;\n", nginxArguments(settings.Cache.Bypass))
+			fmt.Fprintf(builder, "        proxy_no_cache %s;\n", nginxArguments(settings.Cache.Bypass))
 		}
 		if settings.Cache.UseStale {
 			builder.WriteString("        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;\n")
@@ -1559,6 +1599,18 @@ func requireFiles(paths ...string) error {
 func nginxQuote(value string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`)
 	return `"` + replacer.Replace(value) + `"`
+}
+
+// Quote only arguments that need it, keeping Nginx variable expansion intact.
+func nginxArguments(values []string) string {
+	args := make([]string, len(values))
+	for i, value := range values {
+		args[i] = value
+		if value == "" || strings.ContainsAny(value, " \t\n\r\\\"'{};#") {
+			args[i] = nginxDirectiveQuote(value)
+		}
+	}
+	return strings.Join(args, " ")
 }
 
 func nginxDirectiveQuote(value string) string {

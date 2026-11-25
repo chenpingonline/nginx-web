@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import { computed, reactive, ref, toRaw } from "vue";
 import {
   PhArrowClockwise,
@@ -253,12 +254,11 @@ defineExpose({ show });
             />
           </div>
           <div class="field">
-            <label for="policy-download" class="policy-field-label">单请求限速（KB/s）<HelpHint text="按单个响应计算，并行下载的速度会叠加；0 表示不限制。" /></label
-            ><input
+            <label for="policy-download" class="policy-field-label">单请求限速<HelpHint text="例如 128k 表示每个响应每秒 128 KB，0 表示不限制。" /></label
+            ><NginxQuantityInput unit="kib"
               id="policy-download"
-              v-model.number="form.settings.download_kbps"
+              v-model="form.settings.download_kbps"
               class="input"
-              type="number"
               min="0"
               max="1048576"
             />

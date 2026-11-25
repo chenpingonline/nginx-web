@@ -7,6 +7,7 @@ declare module '@trimjs/web-app' {
     isStandaloneWeb: boolean;
     ready(): Promise<void>;
     openAppSetting(): Promise<unknown>;
+    pickSharedFile(params?: { title?: string; okText?: string; multiple?: boolean }): Promise<{ code: number; msg?: string; data?: string[] } | undefined>;
     pickFile(params: { directory: boolean; multiple?: boolean; title?: string; okText?: string }): Promise<string[] | undefined>;
     getPlatformConfig(): Promise<{ theme: 'dark' | 'light' }>;
     $off(event: 'os/theme', callback: (theme: 'dark' | 'light') => void): Promise<void>;

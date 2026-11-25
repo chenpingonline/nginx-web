@@ -734,7 +734,8 @@ func (s *AppService) NginxStart() (ApplyResult, error) {
 			return ApplyResult{}, err
 		}
 	}
-	return s.nginx.Start()
+	applied, _ := s.appliedState(s.State())
+	return s.nginx.Start(applied.Rules...)
 }
 
 func (s *AppService) NginxStop() (ApplyResult, error) {
@@ -747,7 +748,8 @@ func (s *AppService) NginxReload() (ApplyResult, error) {
 			return ApplyResult{}, err
 		}
 	}
-	return s.nginx.Reload()
+	applied, _ := s.appliedState(s.State())
+	return s.nginx.Reload(applied.Rules...)
 }
 
 func (s *AppService) NginxTest() (ApplyResult, error) {
@@ -937,6 +939,19 @@ func (s *AppService) RotateLogs(force bool) (bool, error) {
 		return true, s.nginx.ReopenLogs()
 	}
 	return false, nil
+}
+
+func (s *AppService) RuleWarnings(id string) ([]string, error) {
+	state := s.store.Snapshot()
+	for _, rule := range state.Rules {
+		if rule.ID == id {
+			if !rule.Enabled {
+				return []string{}, nil
+			}
+			return s.nginx.RuleWarnings(state, id)
+		}
+	}
+	return nil, errors.New("规则不存在")
 }
 
 func (s *AppService) RuleConfig(id string, stream bool) (string, error) {

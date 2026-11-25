@@ -297,6 +297,7 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .advanced-box summary { cursor: pointer; padding: 8px 10px; font-size: 13px; font-weight: 680; color: var(--text-muted); }
 .advanced-box[open] summary { border-bottom: 1px solid var(--line); }
 .compact-grid { padding: 9px; gap: 8px; }
+.cache-settings-box .compact-grid,
 .access-control-box .compact-grid,
 .security-settings-box .compact-grid,
 .header-processing-box .compact-grid { column-gap: 72px; }
@@ -411,7 +412,7 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .certificate-modal .field-help a { font-size: 13px; font-weight: 400; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .certificate-modal .field-help a.dns-credential-link { font-size: 14px; font-weight: 600; }
 .modal-header { flex-shrink: 0; min-height: 44px; padding: 6px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
-.rule-modal .modal-header { padding-inline: 20px; gap: 10px; }
+.rule-modal .modal-header { position: relative; z-index: 1; padding-inline: 20px; gap: 10px; }
 :is(.stream-modal, .policy-modal, .pool-modal) .modal-header { flex-shrink: 0; }
 :is(.rule-modal, .stream-modal, .policy-modal, .pool-modal) .modal-header > .rule-header-actions { display: flex; flex-shrink: 0; gap: 8px; margin-right: 0; }
 .rule-header-actions .button { white-space: nowrap; }
@@ -420,6 +421,7 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 .modal-close svg { display: block; }
 .modal-header > div { margin-right: auto; }
 .modal-header h2 { margin: 0; font-size: 16px; line-height: 24px; }
+.rule-title-row { display: flex; align-items: center; gap: 6px; }
 .rule-modal .modal-header h2 { font-size: 16px; font-weight: 680; letter-spacing: -.25px; }
 .modal-header p { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
 .rule-modal .modal-header p { margin-top: 4px; font-size: 13px; }
@@ -433,6 +435,11 @@ html[data-theme="light"] .app-update-github { color: #fff; }
 
 .toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 200; display: grid; gap: 9px; width: min(360px, calc(100vw - 40px)); }
 .toast { background: #1f282f; color: white; border-radius: 11px; padding: 12px 14px; box-shadow: 0 13px 35px rgba(0,0,0,.2); font-size: 14px; display: flex; align-items: flex-start; gap: 9px; animation: toast-in .2s ease-out; }
+.toast.conflict-notice { display: block; background: var(--surface-solid); color: var(--text); border: 1px solid var(--warning); overflow-wrap: anywhere; }
+.conflict-notice header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.conflict-notice button { background: transparent; color: inherit; border: 0; font-size: 19px; cursor: pointer; padding: 0 4px; }
+.conflict-notice ul { margin: 6px 0 0; padding-left: 1.2em; max-height: 35vh; overflow: auto; }
+.conflict-notice li + li { margin-top: 5px; }
 .toast.success { background: #176e56; }
 .toast.error { background: #a63d3d; }
 .toast span { flex: 1; line-height: 1.5; }
@@ -726,6 +733,16 @@ html[data-theme="dark"] { --scroll-thumb: #686b6e; }
 .proxy-group-count { white-space: nowrap; font-size: 13px; font-weight: 400; color: var(--text-muted); }
 .proxy-group-heading p { margin: 0; color: var(--text-muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .grouped-rule-card .table td { white-space: nowrap; }
+.http-rule-table { table-layout: fixed; min-width: 720px; }
+.http-rule-table th:nth-child(1) { width: 74px; }
+.http-rule-table th:nth-child(2) { width: 110px; }
+.http-rule-table th:nth-child(3) { width: 34%; }
+.http-rule-table th:last-child { width: 164px; }
+.http-rule-table .table-actions { align-items: center; }
+.http-rule-table .table-actions .button.small { min-height: 26px; }
+.http-rule-table .table-actions .icon-button { height: 28px; }
+.http-rule-table .rule-cell-text,
+.http-rule-table .proxy-entry-url { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grouped-rule-card .domain-list { flex-wrap: nowrap; }
 .group-empty { padding: 28px 20px; color: var(--text-muted); }
 @media (max-width: 760px) { .proxy-group-heading { overflow-x: auto; } .proxy-group-summary { flex-shrink: 0; } }

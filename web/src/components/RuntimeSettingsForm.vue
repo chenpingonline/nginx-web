@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import NginxListInput from "./NginxListInput.vue";
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import { PhCopySimple, PhSignIn } from "@phosphor-icons/vue";
 import { minListenPort } from "../permissionMode";
 import AppSelect from "./AppSelect.vue";
@@ -22,13 +24,9 @@ const emit = defineEmits<{
   apply: [value: Settings];
 }>();
 const form = reactive<Settings>(structuredClone(toRaw(props.settings)));
-const trusted = ref(""),
-  gzipTypes = ref("");
 function restore(value: Settings) {
   delete form.hidden_menus;
   Object.assign(form, structuredClone(toRaw(value)));
-  trusted.value = value.real_ip.trusted_proxies.join("\n");
-  gzipTypes.value = value.gzip.types.join("\n");
 }
 watch(() => props.settings, restore, { immediate: true, deep: true });
 defineExpose({ restore });
@@ -50,22 +48,12 @@ function toggleMenu(id: Page) {
   else delete form.hidden_menus;
 }
 function formValue(): Settings {
-  return {
-    ...JSON.parse(JSON.stringify(form)),
-    real_ip: {
-      ...form.real_ip,
-      trusted_proxies: trusted.value.split(/[\s,]+/).filter(Boolean),
-    },
-    gzip: {
-      ...form.gzip,
-      types: gzipTypes.value.split(/[\s,]+/).filter(Boolean),
-    },
-  };
+  return structuredClone(toRaw(form));
 }
 function comparableSettings({ hidden_menus, ...settings }: Settings) {
   return JSON.stringify({ ...settings, hidden_menus: [...(hidden_menus ?? [])].sort() });
 }
-const hasChanges = computed(() => comparableSettings(formValue()) !== comparableSettings(props.settings));
+const hasChanges = computed(() => comparableSettings(form) !== comparableSettings(props.settings));
 function submit(event: Event) {
   const action = (event as SubmitEvent).submitter?.getAttribute("data-action");
   if (action === "test") emit("test", formValue());
@@ -141,11 +129,11 @@ function addSplit() {
         </div>
         <div class="field full">
           <label>可信代理 IP / CIDR</label
-          ><textarea
-            v-model="trusted"
+          ><NginxListInput
+            v-model="form.real_ip.trusted_proxies" directive="set_real_ip_from" repeated
             class="textarea"
             placeholder="192.168.1.0/24&#10;10.0.0.1"
-          ></textarea>
+           />
         </div>
       </div>
     </section>
@@ -169,18 +157,17 @@ function addSplit() {
             type="number"
             min="1"
             max="9"
-          /><label>最小响应大小（字节）</label
-          ><input
-            v-model.number="form.gzip.min_length"
+          /><label>最小响应大小</label
+          ><NginxQuantityInput unit="bytes"
+            v-model="form.gzip.min_length"
             class="input"
-            type="number"
             min="0"
             max="10485760"
           />
         </div>
         <div class="field full">
           <label>MIME 类型</label
-          ><textarea v-model="gzipTypes" class="textarea"></textarea>
+          ><NginxListInput v-model="form.gzip.types" directive="gzip_types" multiline class="textarea" />
         </div>
       </div>
     </section>
@@ -275,18 +262,16 @@ function addSplit() {
             v-model.trim="form.tls.ciphers"
             class="input"
             placeholder="留空使用 OpenSSL 默认值"
-          /><label>会话缓存（MB）</label
-          ><input
-            v-model.number="form.tls.session_cache_mb"
+          /><label>会话缓存</label
+          ><NginxQuantityInput unit="mib"
+            v-model="form.tls.session_cache_mb"
             class="input"
-            type="number"
             min="1"
             max="1024"
-          /><label>会话超时（分钟）</label
-          ><input
-            v-model.number="form.tls.session_timeout_minutes"
+          /><label>会话超时</label
+          ><NginxQuantityInput unit="minutes"
+            v-model="form.tls.session_timeout_minutes"
             class="input"
-            type="number"
             min="1"
             max="1440"
           />
@@ -303,18 +288,16 @@ function addSplit() {
               v-model="form.logging.access_enabled"
               type="checkbox"
             /><span>启用访问日志</span></label
-          ><label>缓冲（KB）</label
-          ><input
-            v-model.number="form.logging.access_buffer_kb"
+          ><label>缓冲</label
+          ><NginxQuantityInput unit="kib"
+            v-model="form.logging.access_buffer_kb"
             class="input"
-            type="number"
             min="0"
             max="1024"
-          /><label>刷新间隔（秒）</label
-          ><input
-            v-model.number="form.logging.access_flush_seconds"
+          /><label>刷新间隔</label
+          ><NginxQuantityInput unit="seconds"
+            v-model="form.logging.access_flush_seconds"
             class="input"
-            type="number"
             min="1"
             max="3600"
           />

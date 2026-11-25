@@ -1,3 +1,4 @@
+import { parseQuantity } from "./nginxQuantity";
 import { ConfigLineError, UnsupportedFormError, parseConfig, newID, importBlocks } from "./nginxConfig";
 import type { ConfigForm } from "./configForm";
 import type { State, StreamRule, UpstreamPool, UpstreamServer } from "./types";
@@ -13,17 +14,12 @@ function endpoint(value: string, node: Node, defaultPort?: number) {
 }
 
 function seconds(value: string, node: Node, allowMilliseconds = false) {
-  const match = /^(\d+)(ms|[smhdw]?)$/.exec(value);
-  if (!match) unsupported(node);
-  const amount = Number(match[1]);
-  if (match[2] === "ms") {
-    if (!allowMilliseconds || amount % 1000 !== 0) unsupported(node);
-    return amount / 1000;
+  if (!allowMilliseconds && value.includes("ms")) unsupported(node);
+  try {
+    return parseQuantity(value, "seconds");
+  } catch {
+    return unsupported(node);
   }
-  const units: Record<string, number> = { "": 1, s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
-  const result = amount * units[match[2]];
-  if (!Number.isSafeInteger(result)) unsupported(node);
-  return result;
 }
 
 function listenAddress(listen: Node) {

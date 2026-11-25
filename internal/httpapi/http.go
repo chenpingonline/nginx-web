@@ -283,7 +283,22 @@ func (a *API) handleAPI(w http.ResponseWriter, r *http.Request, apiPath string) 
 		writeResult(w, http.StatusCreated, config, err)
 	case strings.HasPrefix(apiPath, "/api/custom-configs/"):
 		name := strings.TrimPrefix(apiPath, "/api/custom-configs/")
-		if r.Method == http.MethodPut {
+		if file, found := strings.CutSuffix(name, "/name-warnings"); found && r.Method == http.MethodPost {
+			var input struct {
+				Line            int    `json:"line"`
+				Occurrence      int    `json:"occurrence"`
+				ExpectedContent string `json:"expected_content"`
+			}
+			if !decodeJSONLimit(w, r, &input, 6*1024*1024) {
+				return
+			}
+			if input.Line < 1 || input.Occurrence < 1 {
+				http.Error(w, "配置块位置无效", http.StatusBadRequest)
+				return
+			}
+			warnings, err := a.service.SourceWarnings(file, input.ExpectedContent, input.Line, input.Occurrence)
+			writeResult(w, http.StatusOK, warnings, err)
+		} else if r.Method == http.MethodPut {
 			var input struct {
 				domain.CustomConfig
 				ExpectedContent *string `json:"expected_content"`
@@ -711,6 +726,11 @@ func (a *API) handleStreamRule(w http.ResponseWriter, r *http.Request, id string
 }
 
 func (a *API) handleRule(w http.ResponseWriter, r *http.Request, id string) {
+	if rule, ok := strings.CutSuffix(id, "/name-warnings"); ok && r.Method == http.MethodGet {
+		warnings, err := a.service.RuleWarnings(rule)
+		writeResult(w, http.StatusOK, warnings, err)
+		return
+	}
 	if r.Method == http.MethodGet && strings.HasSuffix(id, "/config") {
 		content, err := a.service.RuleConfig(strings.TrimSuffix(id, "/config"), false)
 		writeResult(w, http.StatusOK, map[string]string{"content": content}, err)

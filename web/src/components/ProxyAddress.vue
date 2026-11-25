@@ -7,7 +7,7 @@ defineEmits<{ copy: [value: string, label: string] }>();
 <template>
   <div class="proxy-entry">
     <span class="proxy-entry-url" :class="{ 'unsupported-entry': unsupported }"
-      :title="unsupported ? '当前版本不支持此监听端口' : undefined">{{ value }}</span>
+      :title="unsupported ? value + '（当前版本不支持此监听端口）' : value">{{ value }}</span>
     <button type="button" class="icon-button proxy-entry-action" :disabled="copyDisabled"
       :aria-label="(entry ? '复制入口 ' : '复制转发服务 ') + value" :title="entry ? '复制入口地址' : '复制转发服务地址'"
       @click="$emit('copy', value, entry ? '入口地址' : '转发服务地址')"><PhCopy :size="16" aria-hidden="true" /></button>

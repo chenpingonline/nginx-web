@@ -1,3 +1,4 @@
+import { parseQuantity, requestBodySizeFields, type QuantityUnit } from "./nginxQuantity.ts";
 import type { CustomConfig, LocationSettings } from "./types";
 
 interface Directive {
@@ -118,6 +119,37 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
   if (quote || active || words.length || stack.length !== 1)
     fail(line, "配置块未闭合或缺少分号");
   return root;
+}
+
+// Accept the argument column or a complete directive copied from nginx.conf.
+export function parseDirectiveArguments(input: string, name: string, repeated = false): string[] {
+  const text = input.trim();
+  if (!text) return [];
+  const complete = text.startsWith(name) && /\s/.test(text.charAt(name.length)) && text.endsWith(";");
+  let source = complete ? text : name + " " + text;
+  if (!source.endsWith(";")) source += ";";
+  const nodes = parseConfig(source);
+  if (!nodes.length || (!repeated && nodes.length !== 1) || nodes.some(n => n.children || n.words[0] !== name || n.words.length < 2)) {
+    throw Error(`请输入 ${name} 的参数或完整指令`);
+  }
+  if (repeated && complete && nodes.some(n => n.words.length !== 2)) throw Error(`${name} 每条指令只接受一个参数`);
+  let args = nodes.flatMap(n => n.words.slice(1));
+  // Legacy comma-separated input is unambiguous for address/method lists.
+  if (!text.endsWith(";") && !/["'\\]/.test(text)) {
+    if (["allow", "deny", "set_real_ip_from", "dav_methods", "server_name", "gzip_types"].includes(name)) {
+      args = args.flatMap(arg => arg.split(",").filter(Boolean));
+    } else if (name === "try_files" && (args.length === 1 && text.includes(",") || /^\$uri,\s*\$uri\/,\s*[^,\s]+$/.test(text))) {
+      args = text.split(/,\s*/).filter(Boolean);
+    }
+  }
+  if (name === "dav_methods") args = args.map(method => method.toLowerCase() === "off" ? "off" : method.toUpperCase());
+  if (name === "try_files" && args.length < 2) throw Error("Try Files 至少需要一个候选路径和一个回退目标");
+  return args;
+}
+
+export function formatDirectiveArguments(values: string[], separator = " "): string {
+  return values.map(value => value && !/[\s"'\\#;{},]/.test(value)
+    ? value : '"' + value.replace(/["\\]/g, "\\$&") + '"').join(separator);
 }
 
 export interface SourceEntry {
@@ -427,7 +459,10 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
     }
     if (d === dav || name === "valid_referers" || (name === "sub_filter_types" && hasSubFilter)) {
       if (d.words.length < 2) unsupported(d);
-      if (name === "valid_referers") settings.valid_referers = d.words.slice(1);
+      if (name === "valid_referers") {
+        settings.valid_referers = d.words.slice(1);
+        settings.native_referer_args = true;
+      }
       if (name === "sub_filter_types") settings.sub_filter_types = d.words.slice(1);
       seen.add(name);
       continue;
@@ -496,11 +531,10 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
     } else if (name === "expires" && (isProxy || settings.backend_type === "static")) settings.expires = value;
     else {
       const key = timeoutKeys.get(name);
-      const duration = /^(\d+)(s|m|h)?$/.exec(value);
-      if (!isProxy || !key || !duration || !Number(duration[1])) unsupported(d);
-      settings[key] =
-        Number(duration[1]) *
-        (duration[2] === "h" ? 3600 : duration[2] === "m" ? 60 : 1);
+      if (!isProxy || !key) unsupported(d);
+      const seconds = directiveQuantity(value, "seconds", d);
+      if (!seconds) unsupported(d);
+      settings[key] = seconds;
     }
   }
 
@@ -539,6 +573,23 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
     settings.proxy_ssl_server_name = false;
   return { id: newID(), name: path, path, match, enabled: true, settings };
 }
+function parseBodySize(node?: Directive) {
+  if (!node) return requestBodySizeFields("1m");
+  try {
+    return requestBodySizeFields(node.words[1]);
+  } catch {
+    return unsupported(node);
+  }
+}
+
+function directiveQuantity(value: string, unit: QuantityUnit, node: Directive): number {
+  try {
+    return parseQuantity(value, unit);
+  } catch {
+    return unsupported(node);
+  }
+}
+
 export function importBlocks(source: string, target: string, firstLine = 1, pools: ReadonlyMap<string, string> = new Map()) {
   const blocks = parseConfig(source, firstLine);
   if (!blocks.length) throw new Error("请输入 server 或 location 配置块");
@@ -555,7 +606,7 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
     const paths: Directive[] = [];
     let legacyHTTP2: boolean | undefined;
     let tls: boolean | undefined, catchAll: boolean | undefined, http2 = false, cert = "", key = "", tracking = "", redirectPort = 0;
-    let staticRoot = "", indexFiles: string[] | undefined, bodyLimit: number | undefined;
+    let staticRoot = "", indexFiles: string[] | undefined, bodyLimit: ReturnType<typeof requestBodySizeFields> | undefined;
     for (const d of block.children) {
       const [name, value] = d.words;
       if (name === "location") paths.push(d);
@@ -586,11 +637,7 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
       } else if (name === "index" && d.words.length > 1 && !indexFiles) {
         indexFiles = d.words.slice(1);
       } else if (name === "client_max_body_size" && d.words.length === 2 && bodyLimit === undefined) {
-        const size = /^(\d+)([kKmMgG]?)$/.exec(value);
-        if (!size) unsupported(d);
-        const bytes = Number(size[1]) * ({k: 1024, m: 1048576, g: 1073741824}[size[2].toLowerCase()] ?? 1);
-        if (!Number.isSafeInteger(bytes) || bytes % 1048576 !== 0) unsupported(d);
-        bodyLimit = bytes / 1048576;
+        bodyLimit = parseBodySize(d);
       }
       else if (
         d.words[0] === "server_name" &&
@@ -629,7 +676,7 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
       domains: catchAll ? ["*"] : domains,
       listen_port: port,
       listen_type: families.size === 2 ? "dual" : families.has("ipv6") ? "ipv6" : "ipv4",
-      client_max_body_mb: bodyLimit ?? 1,
+      ...(bodyLimit ?? { client_max_body_mb: 1 }),
       connect_timeout_seconds: 60, read_timeout_seconds: 60, send_timeout_seconds: 60,
       upstream_host: root.upstream_host ?? "127.0.0.1",
       upstream_port: root.upstream_port ?? 8080,
@@ -737,14 +784,14 @@ export function sourceRuleCandidate(entry: SourceEntry, rules: import("./types")
     ...original, id: newID(), group_id: "", inherit_fields: [], enabled: true, domains, name: domains[0],
     listen_port: port, listen_type: addresses.length === 2 ? "dual" : addresses[0]?.startsWith("[") ? "ipv6" : "ipv4",
     tls: listens.some(n => n.words.includes("ssl")), http2: args("http2")[0] === "on", certificate_id: cert,
-    client_max_body_mb: Number.parseInt(args("client_max_body_size")[0] || "0", 10),
+    ...parseBodySize(nodes.find(n => n.words[0] === "client_max_body_size")),
     preserve_host: root.some(n => n.words.join(" ") === "proxy_set_header Host $fnproxy_client_host"),
     websocket: root.some(n => n.words.join(" ") === "proxy_set_header Upgrade $http_upgrade"),
     streaming: directive("proxy_request_buffering") === "off",
     verify_upstream_tls: directive("proxy_ssl_verify") === "on",
-    connect_timeout_seconds: parseInt(directive("proxy_connect_timeout") || "0", 10),
-    read_timeout_seconds: parseInt(directive("proxy_read_timeout") || "0", 10),
-    send_timeout_seconds: parseInt(directive("proxy_send_timeout") || "0", 10),
+    connect_timeout_seconds: directiveQuantity(directive("proxy_connect_timeout") || "0", "seconds", root.find(d => d.words[0] === "proxy_connect_timeout") ?? nodes[0]),
+    read_timeout_seconds: directiveQuantity(directive("proxy_read_timeout") || "0", "seconds", root.find(d => d.words[0] === "proxy_read_timeout") ?? nodes[0]),
+    send_timeout_seconds: directiveQuantity(directive("proxy_send_timeout") || "0", "seconds", root.find(d => d.words[0] === "proxy_send_timeout") ?? nodes[0]),
     ...backend, root_location: { ...original?.root_location, ...backend, ...(target && { upstream_path: target[4] ?? "" }) },
   };
   return { source, raw, rule, generated: true };

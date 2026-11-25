@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import NginxQuantityInput from "./NginxQuantityInput.vue";
 import { computed, onBeforeUnmount, ref, useId } from "vue";
 import { TrimApp } from "@trimjs/web-app";
 import AppSelect from "./AppSelect.vue";
-import { parseTryFiles, formatTryFiles } from "../tryFiles";
+import NginxListInput from "./NginxListInput.vue";
 import HelpHint from "./HelpHint.vue";
 import type { LocationSettings, UpstreamPool } from "../types";
 const standalone = __STANDALONE__;
@@ -22,9 +23,9 @@ const bufferingFields = [
   {key: "proxy_request_buffering", label: "请求缓冲"},
 ] as const;
 const timeoutFields = [
-  {key:"connect_timeout_seconds", label:"连接超时（秒）", max:600},
-  {key:"read_timeout_seconds", label:"读取超时（秒）", max:86400},
-  {key:"send_timeout_seconds", label:"发送超时（秒）", max:86400},
+  {key:"connect_timeout_seconds", label:"连接超时", max:600},
+  {key:"read_timeout_seconds", label:"读取超时", max:86400},
+  {key:"send_timeout_seconds", label:"发送超时", max:86400},
 ] as const;
 const timeoutId = useId();
 const customTimeout = ref(timeoutFields.some(({key}) => Boolean(props.model[key])));
@@ -32,32 +33,10 @@ function toggleTimeout(event: Event) {
   customTimeout.value = (event.target as HTMLInputElement).checked;
   if (!customTimeout.value) for (const {key} of timeoutFields) delete props.model[key];
 }
-const list = (value: string) =>
-  value
-    .split(/[\n,]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-const setList = (key: "index_files" | "allow" | "deny" | "sub_filter_types" | "valid_referers", event: Event) => {
-  props.model[key] = list((event.target as HTMLInputElement).value);
-};
-function updateTryFiles(event: Event) {
-  const input = event.target as HTMLInputElement;
-  try {
-    const values = parseTryFiles(input.value);
-    input.setCustomValidity("");
-    if (event.type === "change") props.model.try_files = values;
-  } catch (error) {
-    input.setCustomValidity((error as Error).message);
-  }
-}
 const tryFilesId = useId();
-const setCacheBypass = (event: Event) => { props.model.cache.bypass = list((event.target as HTMLInputElement).value); };
 const addRewrite = () => props.model.rewrites.push({ pattern: "^/(.*)$", replacement: "/$1", flag: "last" });
 const addHeader = (kind: "request_headers" | "response_headers") =>
   props.model[kind].push({ name: "", value: "", always: kind === "response_headers" });
-const setDavMethods = (event: Event) => {
-  props.model.dav.methods = list((event.target as HTMLInputElement).value).map((item) => item.toUpperCase());
-};
 const changeBackend = () => { if (props.model.backend_type !== "static") props.model.dav.enabled = false; };
 const backendLabelId = useId();
 const commonBackends = [
@@ -104,15 +83,32 @@ let disposed = false;
 onBeforeUnmount(() => { disposed = true; });
 async function selectDirectory() { await directoryAction("select"); }
 async function openAuthorization() { await directoryAction("authorize"); }
-function isDirectorySelectionCancelled(error: unknown): boolean {
+function isDirectorySelectionCancelled(error: unknown, picker: "select" | "authorize"): boolean {
   // The host picker may reject without a reason when its dialog is dismissed.
   if (error == null || error === "") return true;
   const isCancel = (value: unknown) => typeof value === "string"
-    && /^(cancel|cancelled|canceled|AbortError|取消|用户取消)$/i.test(value.trim());
+    && (/^(cancel|cancelled|canceled|AbortError|取消|用户取消)$/i.test(value.trim())
+      // Some fnOS authorization dialogs return only this generic message on dismissal.
+      || (picker === "authorize" && value.trim() === "Operation failed"));
   if (isCancel(error)) return true;
   if (typeof error !== "object") return false;
-  const reason = error as { name?: unknown; code?: unknown; message?: unknown };
-  return isCancel(reason.name) || isCancel(reason.code) || isCancel(reason.message);
+  const reason = error as { name?: unknown; code?: unknown; message?: unknown; msg?: unknown };
+  return isCancel(reason.name) || isCancel(reason.code) || isCancel(reason.message) || isCancel(reason.msg);
+}
+async function pickAuthorizationDirectory(sdk: TrimApp) {
+  try {
+    const result = await sdk.pickSharedFile({ title: "选择授权目录", okText: "确认授权", multiple: false });
+    if (result && result.code !== 0) throw new Error(result.msg || "目录授权失败，请重试。");
+  } catch (error) {
+    if (isDirectorySelectionCancelled(error, "authorize") || disposed) return;
+    // Older hosts only expose the application settings entry.
+    if (error instanceof Error && /pickSharedFile.*(?:is not a function|requires appApi)|NotSupportedInExtensionHost: pickSharedFile/.test(error.message)) {
+      await sdk.openAppSetting();
+      return;
+    }
+    if (error && typeof error === "object" && "msg" in error && typeof error.msg === "string") throw new Error(error.msg);
+    throw error;
+  }
 }
 async function directoryAction(action: "select" | "authorize") {
   if (pickingDirectory.value || openingAuthorization.value) return;
@@ -134,12 +130,12 @@ async function directoryAction(action: "select" | "authorize") {
       ? "请在飞牛应用中心打开 nginx-web 的设置，进入“访问权限”添加目录授权。"
       : "请从飞牛桌面打开应用后选择 NAS 目录，或手动填写目录。");
     if (action === "authorize") {
-      await sdk.openAppSetting();
+      await pickAuthorizationDirectory(sdk);
       return;
     }
     const paths = await sdk.pickFile({ directory: true, multiple: false, title: "选择静态网站目录", okText: "选择目录" })
       .catch((error: unknown) => {
-        if (isDirectorySelectionCancelled(error)) return undefined;
+        if (isDirectorySelectionCancelled(error, "select")) return undefined;
         throw error;
       });
     if (disposed || props.model.backend_type !== "static") return;
@@ -148,7 +144,7 @@ async function directoryAction(action: "select" | "authorize") {
     if (!path.startsWith("/") || /[\0\r\n]/.test(path)) throw new Error("选择器未返回有效的 NAS 绝对路径，请手动填写目录。");
     props.model.static_path = path;
   } catch (error) {
-    if (!disposed) directoryError.value = error instanceof Error ? error.message : (action === "authorize" ? "无法打开应用设置，请在飞牛应用中心进入 nginx-web 的访问权限页面。" : "目录选择失败，请重试或手动填写目录。");
+    if (!disposed) directoryError.value = error instanceof Error ? error.message : (action === "authorize" ? "无法打开授权目录选择器，请在应用中心的 nginx-web 设置中添加目录授权。" : "目录选择失败，请重试或手动填写目录。");
   } finally {
     clearTimeout(timer);
     if (!disposed) busy.value = false;
@@ -208,7 +204,7 @@ async function directoryAction(action: "select" | "authorize") {
           <button v-if="!standalone" type="button" class="button" :disabled="pickingDirectory || openingAuthorization" @click="selectDirectory">{{ pickingDirectory ? "选择中…" : "选择目录" }}</button>
         </div>
         <span v-if="standalone" class="field-help">{{ container ? "填写已挂载到容器内的目录，例如 /mnt/www。" : "填写服务器上的目录，例如 /srv/www，并在服务配置中允许访问该目录。" }}</span>
-        <span v-else class="field-help">选择 NAS 上的目录；请在应用设置的“访问权限”中授权。<button type="button" class="directory-authorization-link" :disabled="pickingDirectory || openingAuthorization" @click="openAuthorization">{{ openingAuthorization ? "打开中…" : "前往授权" }}</button></span>
+        <span v-else class="field-help">静态目录需先授权给 nginx-web。<button type="button" class="directory-authorization-link" :disabled="pickingDirectory || openingAuthorization" @click="openAuthorization">{{ openingAuthorization ? "打开中…" : "前往授权" }}</button></span>
         <span v-if="directoryError" class="field-error" role="alert">{{ directoryError }}</span>
       </div>
       <div class="checkbox-row field">
@@ -228,15 +224,15 @@ async function directoryAction(action: "select" | "authorize") {
         </span>
       </div>
       <label class="checkbox-row field"><input v-model="model.autoindex" type="checkbox" /> 开启目录浏览</label>
-      <div class="field"><label>首页文件</label><input class="input static-option-input" :value="model.index_files.join(', ')" @change="setList('index_files', $event)" /></div>
-      <div class="field"><label :for="tryFilesId">Try Files</label><input :id="tryFilesId" class="input static-option-input" :value="formatTryFiles(model.try_files)" placeholder="$uri $uri/ /index.html" @input="updateTryFiles" @change="updateTryFiles" /></div>
+      <div class="field"><label>首页文件</label><NginxListInput v-model="model.index_files" directive="index" aria-label="首页文件" class="input static-option-input" /></div>
+      <div class="field"><label :for="tryFilesId">Try Files</label><NginxListInput v-model="model.try_files" directive="try_files" aria-label="Try Files" class="input static-option-input" :id="tryFilesId" placeholder="$uri $uri/ /index.html" /></div>
 
     </template>
     <div v-if="['static','proxy'].includes(model.backend_type)" class="field"><label :for="timeoutId+'-expires'">缓存头 Expires</label><input :id="timeoutId+'-expires'" v-model.trim="model.expires" class="input" placeholder="7d / max / off" /></div>
     <template v-if="model.backend_type === 'proxy'">
       <div class="checkbox-row field full"><input :id="timeoutId" type="checkbox" :checked="customTimeout" @change="toggleTimeout" /><label :for="timeoutId">自定义路径超时</label></div>
       <template v-if="customTimeout">
-        <div v-for="field in timeoutFields" :key="field.key" class="field timeout-field"><label :for="timeoutId+field.key">{{ field.label }}</label><input :id="timeoutId+field.key" type="number" class="input" min="1" :max="field.max" placeholder="继承规则" :value="model[field.key] || ''" @input="model[field.key] = ($event.target as HTMLInputElement).valueAsNumber || undefined" /></div>
+        <div v-for="field in timeoutFields" :key="field.key" class="field timeout-field"><label :for="timeoutId+field.key">{{ field.label }}</label><NginxQuantityInput :id="timeoutId+field.key" unit="seconds" optional class="input" min="1" :max="field.max" placeholder="继承规则" :model-value="model[field.key]" @update:model-value="model[field.key] = $event" @clear="delete model[field.key]" /></div>
       </template>
     </template>
     <template v-if="model.backend_type === 'return'">
@@ -247,7 +243,7 @@ async function directoryAction(action: "select" | "authorize") {
     <details class="path-advanced full">
       <summary>路径高级设置<span>缓存、重写、鉴权与 Header</span></summary>
       <div class="location-settings path-advanced-content">
-    <details v-if="model.backend_type === 'proxy'" class="advanced-box full">
+    <details v-if="model.backend_type === 'proxy'" class="advanced-box full cache-settings-box">
       <summary>缓冲、缓存与大文件切片</summary>
       <div class="form-grid compact-grid">
         <div v-for="field in bufferingFields" :key="field.key" class="field buffering-field">
@@ -257,16 +253,22 @@ async function directoryAction(action: "select" | "authorize") {
             <option value="">继承规则</option><option value="on">开启</option><option value="off">关闭</option>
           </AppSelect>
         </div>
-        <label class="checkbox-row field full"><input v-model="model.cache.enabled" type="checkbox" /> 启用代理缓存</label>
+        <div class="checkbox-row full">
+          <input :id="timeoutId + '-cache-enabled'" v-model="model.cache.enabled" type="checkbox" />
+          <label :for="timeoutId + '-cache-enabled'">启用代理缓存</label>
+        </div>
         <template v-if="model.cache.enabled">
-          <div class="field"><label>缓存区（MB）</label><input v-model.number="model.cache.keys_zone_mb" class="input" type="number" min="1" /></div>
-          <div class="field"><label>磁盘上限（MB）</label><input v-model.number="model.cache.max_size_mb" class="input" type="number" min="1" /></div>
-          <div class="field"><label>未访问失效（分钟）</label><input v-model.number="model.cache.inactive_minutes" class="input" type="number" min="1" /></div>
-          <div class="field"><label>响应有效期（秒）</label><input v-model.number="model.cache.valid_seconds" class="input" type="number" min="1" /></div>
-          <div class="field"><label>切片大小（KB）</label><input v-model.number="model.cache.slice_kb" class="input" type="number" min="0" /><span class="field-help">0 表示不开启切片。</span></div>
-          <label class="checkbox-row field"><input v-model="model.cache.use_stale" type="checkbox" /> 故障时使用过期缓存</label>
+          <div class="field"><label>缓存区</label><NginxQuantityInput unit="mib" v-model="model.cache.keys_zone_mb" class="input" min="1" /></div>
+          <div class="field"><label>磁盘上限</label><NginxQuantityInput unit="mib" v-model="model.cache.max_size_mb" class="input" min="1" /></div>
+          <div class="field"><label>未访问失效</label><NginxQuantityInput unit="minutes" v-model="model.cache.inactive_minutes" class="input" min="1" /></div>
+          <div class="field"><label>响应有效期</label><NginxQuantityInput unit="seconds" v-model="model.cache.valid_seconds" class="input" min="1" /></div>
+          <div class="field"><label>切片大小</label><NginxQuantityInput unit="kib" v-model="model.cache.slice_kb" class="input" min="0" /><span class="field-help">0 表示不开启切片。</span></div>
+          <div class="checkbox-row">
+            <input :id="timeoutId + '-cache-stale'" v-model="model.cache.use_stale" type="checkbox" />
+            <label :for="timeoutId + '-cache-stale'">故障时使用过期缓存</label>
+          </div>
           <div class="field full"><label>缓存 Key</label><input v-model="model.cache.key" class="input" /></div>
-          <div class="field full"><label>绕过缓存变量</label><input class="input" :value="model.cache.bypass.join(', ')" placeholder="$cookie_nocache, $arg_nocache" @change="setCacheBypass" /></div>
+          <div class="field full"><label>绕过缓存条件</label><NginxListInput v-model="model.cache.bypass" directive="proxy_cache_bypass" aria-label="绕过缓存条件" class="input" placeholder="$cookie_nocache $arg_nocache" /></div>
         </template>
       </div>
     </details>
@@ -274,8 +276,8 @@ async function directoryAction(action: "select" | "authorize") {
     <details class="advanced-box full access-control-box">
       <summary>路径重写与访问控制</summary>
       <div class="form-grid compact-grid">
-        <div class="field"><label>允许 IP/CIDR</label><textarea class="textarea small access-list-textarea" :value="model.allow.join('\n')" @change="setList('allow', $event)"></textarea></div>
-        <div class="field"><label>拒绝 IP/CIDR</label><textarea class="textarea small access-list-textarea" :value="model.deny.join('\n')" @change="setList('deny', $event)"></textarea></div>
+        <div class="field"><label>允许 IP/CIDR</label><NginxListInput v-model="model.allow" directive="allow" aria-label="允许 IP/CIDR" class="textarea small access-list-textarea" repeated /></div>
+        <div class="field"><label>拒绝 IP/CIDR</label><NginxListInput v-model="model.deny" directive="deny" aria-label="拒绝 IP/CIDR" class="textarea small access-list-textarea" repeated /></div>
         <div v-for="(item, index) in model.rewrites" :key="index" class="inline-editor full">
           <input v-model="item.pattern" class="input" placeholder="正则" /><input v-model="item.replacement" class="input" placeholder="目标" />
           <AppSelect v-model="item.flag" class="select rewrite-flag-select"><option value="last">last</option><option value="break">break</option><option value="redirect">302</option><option value="permanent">301</option></AppSelect>
@@ -299,7 +301,7 @@ async function directoryAction(action: "select" | "authorize") {
         <div v-if="model.secure_link.enabled" class="field"><label>签名参数</label><input v-model.trim="model.secure_link.argument" class="input" /></div>
         <div v-if="model.secure_link.enabled" class="field"><label>签名密钥</label><input v-model="model.secure_link.secret" class="input" type="password" required /></div>
         <label v-if="model.backend_type === 'static'" class="checkbox-row field"><input v-model="model.dav.enabled" type="checkbox" /> WebDAV 写入</label>
-        <div v-if="model.dav.enabled" class="field"><label>允许方法</label><input class="input" :value="model.dav.methods.join(', ')" @change="setDavMethods" /></div>
+        <div v-if="model.dav.enabled" class="field"><label>允许方法</label><NginxListInput v-model="model.dav.methods" directive="dav_methods" aria-label="允许方法" class="input" /></div>
         <label v-if="model.dav.enabled" class="checkbox-row field"><input v-model="model.dav.create_full_put_path" type="checkbox" /> 自动创建 PUT 目录</label>
       </div>
     </details>
@@ -351,7 +353,7 @@ async function directoryAction(action: "select" | "authorize") {
         <div class="field"><label>镜像 URI</label><input v-model.trim="model.mirror" class="input" placeholder="/_mirror" /></div>
         <label class="checkbox-row field"><input v-model="model.mirror_request_body" type="checkbox" /> 镜像请求体</label>
         <label class="checkbox-row field"><input v-model="model.ssi" type="checkbox" /> 开启 SSI</label>
-        <div class="field"><label>允许 Referer</label><input class="input" :value="model.valid_referers.join(', ')" placeholder="none, blocked, server_names" @change="setList('valid_referers', $event)" /></div>
+        <div class="field"><label>允许 Referer</label><NginxListInput v-model="model.valid_referers" :legacy-raw="!model.native_referer_args" @update:model-value="model.native_referer_args = true" directive="valid_referers" aria-label="允许 Referer" class="input" placeholder="none blocked server_names" /></div>
         <label class="checkbox-row field"><input v-model="model.deny_invalid_referer" type="checkbox" /> 拒绝无效 Referer</label>
       </div>
     </details>
@@ -361,7 +363,8 @@ async function directoryAction(action: "select" | "authorize") {
 </template>
 
 <style scoped>
-.buffering-field > label { justify-self: end; font-weight: 600; color: var(--text); }
+.buffering-field > label { font-weight: 600; color: var(--text); }
+.cache-settings-box .checkbox-row input { margin: 0; }
 .rule-modal .rule-form-grid .location-settings > .timeout-field { display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:8px; }
 .timeout-field label { color:var(--text);font-weight:600; }
 .timeout-field input { min-width:0;width:100%; }

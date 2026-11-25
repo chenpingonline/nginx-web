@@ -181,6 +181,7 @@ export interface LocationSettings {
   mirror: string;
   mirror_request_body: boolean;
   ssi: boolean;
+  native_referer_args?: boolean;
   valid_referers: string[];
   deny_invalid_referer: boolean;
 }
@@ -223,6 +224,7 @@ export interface ProxyRuleInput {
   read_timeout_seconds: number;
   send_timeout_seconds: number;
   client_max_body_mb: number;
+  client_max_body_size?: string;
   rate_limit: RateLimitSettings;
   authentication: RuleAuthentication;
   root_location: LocationSettings;
@@ -522,6 +524,7 @@ export interface GeneratedConfig {
   files: Record<string, string>;
 }
 export interface ApplyResult {
+  warnings?: string[];
   action: string;
   message: string;
   output?: string;

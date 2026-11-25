@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -254,6 +255,7 @@ type LocationSettings struct {
 	Mirror               string             `json:"mirror,omitempty"`
 	MirrorRequestBody    bool               `json:"mirror_request_body"`
 	SSI                  bool               `json:"ssi"`
+	NativeRefererArgs    bool               `json:"native_referer_args,omitempty"`
 	ValidReferers        []string           `json:"valid_referers"`
 	DenyInvalidReferer   bool               `json:"deny_invalid_referer"`
 }
@@ -637,12 +639,12 @@ func ValidateLocationSettings(settings LocationSettings, pools map[string]Upstre
 			return errors.New("静态文件目录必须是安全的绝对路径")
 		}
 		for _, name := range settings.IndexFiles {
-			if !safeToken(name) {
+			if name == "" || strings.ContainsAny(name, "\x00\r\n") || slices.Contains(strings.Split(name, "/"), "..") {
 				return errors.New("Index 文件名包含不允许的字符")
 			}
 		}
 		for _, item := range settings.TryFiles {
-			if strings.ContainsAny(item, "{};\r\n") {
+			if strings.ContainsAny(item, "\x00\r\n") {
 				return errors.New("Try Files 包含不允许的字符")
 			}
 		}
@@ -678,8 +680,8 @@ func ValidateLocationSettings(settings LocationSettings, pools map[string]Upstre
 			return errors.New("缓存 Key 包含不允许的字符")
 		}
 		for _, value := range cache.Bypass {
-			if !variablePattern.MatchString(value) {
-				return errors.New("缓存绕过条件必须是安全的 Nginx 变量")
+			if strings.ContainsAny(value, "\x00\r\n") {
+				return errors.New("缓存绕过条件包含不允许的字符")
 			}
 		}
 	}
@@ -718,7 +720,7 @@ func ValidateLocationSettings(settings LocationSettings, pools map[string]Upstre
 			return errors.New("WebDAV 至少需要一个方法")
 		}
 		for _, method := range settings.DAV.Methods {
-			if !allowedDAV[method] {
+			if !allowedDAV[method] && !(len(settings.DAV.Methods) == 1 && method == "off") {
 				return errors.New("WebDAV 方法不支持")
 			}
 		}
@@ -737,7 +739,7 @@ func ValidateLocationSettings(settings LocationSettings, pools map[string]Upstre
 		}
 	}
 	for _, referer := range settings.ValidReferers {
-		if strings.ContainsAny(referer, "{};\r\n") {
+		if strings.ContainsAny(referer, "\x00\r\n") || (!settings.NativeRefererArgs && strings.ContainsAny(referer, "{};")) {
 			return errors.New("Referer 规则不合法")
 		}
 	}
