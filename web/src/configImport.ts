@@ -38,7 +38,7 @@ export function externalPool(node: Block) {
   return node.words[0] === "upstream" && !managedPoolName.test(node.words[1] ?? "");
 }
 
-function namedPool(text: string, node: Block, scope: Scope) {
+export function namedPool(text: string, node: Block, scope: Scope) {
   const name = node.words[1];
   if (node.words.length !== 2 || !node.children || !/^[\w.-]+$/.test(name))
     throw new ConfigLineError(node.line, "转发服务组需要明确的名称与节点列表");

@@ -108,6 +108,7 @@ defineExpose({ hasEdits: () => props.sourceFile && sourceValues() !== initialSou
 const unlimitedBodySize = computed(() => /^0+[kKmMgG]?$/.test(bodySizeText.value));
 function updateBodySize(event: Event) {
   const input = event.target as HTMLInputElement;
+  form.inherit_nginx_body_size = false;
   bodySizeText.value = input.value;
   try {
     Object.assign(form, requestBodySizeFields(input.value.trim()));
@@ -226,6 +227,8 @@ watch(
         locations: [],
       },
     );
+    form.comments = rule?.comments;
+    form.inherit_nginx_body_size = rule?.inherit_nginx_body_size;
     form.client_max_body_size = rule?.client_max_body_size;
     bodySizeText.value = form.client_max_body_size ?? formatQuantity(form.client_max_body_mb, "mib");
     form.rate_limit = {

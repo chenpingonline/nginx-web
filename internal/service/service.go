@@ -229,6 +229,12 @@ func (s *AppService) UpdateUpstreamPool(id string, input UpstreamPool) (Upstream
 				continue
 			}
 			input.ID = id
+			if input.Comments == nil {
+				input.Comments = state.UpstreamPools[index].Comments
+			}
+			if input.NginxName == "" {
+				input.NginxName = state.UpstreamPools[index].NginxName
+			}
 			input.CreatedAt = state.UpstreamPools[index].CreatedAt
 			input.UpdatedAt = time.Now().UTC()
 			domain.NormalizeUpstreamPool(&input)
@@ -357,6 +363,9 @@ func (s *AppService) UpdateStreamRule(id string, input StreamRule) (StreamRule, 
 				continue
 			}
 			input.ID = id
+			if input.Comments == nil {
+				input.Comments = state.StreamRules[index].Comments
+			}
 			input.CreatedAt = state.StreamRules[index].CreatedAt
 			input.UpdatedAt = time.Now().UTC()
 			domain.NormalizeStreamRule(&input)
@@ -422,6 +431,9 @@ func (s *AppService) UpdateRule(id string, input ProxyRule) (ProxyRule, error) {
 				continue
 			}
 			input.ID = id
+			if input.Comments == nil {
+				input.Comments = state.Rules[index].Comments
+			}
 			input.CreatedAt = state.Rules[index].CreatedAt
 			input.UpdatedAt = time.Now().UTC()
 			domain.ResolveRuleGroup(&input, state.RuleGroups)

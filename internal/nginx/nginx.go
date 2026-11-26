@@ -500,15 +500,20 @@ func (m *Manager) runCommand(ctx context.Context, args ...string) ([]byte, error
 	return cmd.CombinedOutput()
 }
 
+func upstreamPoolIndex(state State) map[string]domain.UpstreamPool {
+	pools := make(map[string]domain.UpstreamPool, len(state.UpstreamPools))
+	for _, pool := range state.UpstreamPools {
+		pools[pool.ID] = pool
+	}
+	return pools
+}
+
 func resolveRenderReferences(state *State) (map[string]CertificateMeta, map[string]domain.UpstreamPool, map[string]domain.RateLimitPolicy) {
 	certs := make(map[string]CertificateMeta, len(state.Certificates))
 	for _, cert := range state.Certificates {
 		certs[cert.ID] = cert
 	}
-	pools := make(map[string]domain.UpstreamPool, len(state.UpstreamPools))
-	for _, pool := range state.UpstreamPools {
-		pools[pool.ID] = pool
-	}
+	pools := upstreamPoolIndex(*state)
 	policies := make(map[string]domain.RateLimitPolicy, len(state.RateLimitPolicies))
 	for _, policy := range state.RateLimitPolicies {
 		policies[policy.ID] = policy
@@ -529,12 +534,15 @@ func resolveRenderReferences(state *State) (map[string]CertificateMeta, map[stri
 func (m *Manager) RuleConfig(state State, id string, stream bool) (string, error) {
 	state = domain.CloneState(state)
 	domain.ApplyStateDefaults(&state)
+	// Disabled rules may still reference a hidden pool in their form preview.
+	allPools := state.UpstreamPools
 	state = domain.MenuRuntimeState(state)
+	state.UpstreamPools = allPools
 	certs, pools, _ := resolveRenderReferences(&state)
 	if stream {
 		for _, r := range state.StreamRules {
 			if r.ID == id {
-				return m.renderStreamRule(r, certs, state.Settings)
+				return m.renderStreamRule(r, certs, state.Settings, pools)
 			}
 		}
 	} else {
@@ -658,7 +666,7 @@ func (m *Manager) render(state State, confDPath string) (string, map[string]stri
 		if !rule.Enabled {
 			continue
 		}
-		content, err := m.renderStreamRule(rule, certs, state.Settings)
+		content, err := m.renderStreamRule(rule, certs, state.Settings, pools)
 		if err != nil {
 			return "", nil, err
 		}
@@ -837,9 +845,9 @@ func hasStreamConfig(state State) bool {
 	return false
 }
 
-func streamTarget(poolID, host string, port int) string {
+func streamTarget(pools map[string]domain.UpstreamPool, poolID, host string, port int) string {
 	if poolID != "" {
-		return "fnproxy_stream_" + poolID
+		return pools[poolID].ConfigName()
 	}
 	if net.ParseIP(host) != nil && strings.Contains(host, ":") {
 		host = "[" + host + "]"
@@ -847,7 +855,42 @@ func streamTarget(poolID, host string, port int) string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
+func renderUpstream(pool domain.UpstreamPool) string {
+	var block strings.Builder
+	fmt.Fprintf(&block, "upstream %s {\n", pool.ConfigName())
+	switch pool.Strategy {
+	case "least_conn":
+		block.WriteString("    least_conn;\n")
+	case "ip_hash":
+		block.WriteString("    ip_hash;\n")
+	case "hash":
+		fmt.Fprintf(&block, "    hash %s consistent;\n", pool.HashKey)
+	case "random":
+		block.WriteString("    random two least_conn;\n")
+	}
+	for _, server := range pool.Servers {
+		host := server.Host
+		if net.ParseIP(host) != nil && strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		fmt.Fprintf(&block, "    server %s:%d weight=%d max_fails=%d fail_timeout=%ds", host, server.Port, server.Weight, server.MaxFails, server.FailTimeout)
+		if server.Backup {
+			block.WriteString(" backup")
+		}
+		if server.Down {
+			block.WriteString(" down")
+		}
+		block.WriteString(";\n")
+	}
+	if pool.Protocol == "http" && pool.Keepalive > 0 {
+		fmt.Fprintf(&block, "    keepalive %d;\n    keepalive_requests %d;\n    keepalive_time %ds;\n    keepalive_timeout %ds;\n", pool.Keepalive, pool.KeepaliveRequests, pool.KeepaliveTime, pool.KeepaliveTimeout)
+	}
+	block.WriteString("}\n\n")
+	return withConfigComments(block.String(), pool.Comments)
+}
+
 func renderStreamPrelude(state State) string {
+	pools := upstreamPoolIndex(state)
 	var builder strings.Builder
 	for _, rule := range state.StreamRules {
 		if rule.Enabled && rule.AccessLog {
@@ -860,30 +903,7 @@ func renderStreamPrelude(state State) string {
 		if pool.Protocol != "stream" {
 			continue
 		}
-		fmt.Fprintf(&builder, "upstream fnproxy_stream_%s {\n", pool.ID)
-		switch pool.Strategy {
-		case "least_conn":
-			builder.WriteString("    least_conn;\n")
-		case "hash":
-			fmt.Fprintf(&builder, "    hash %s consistent;\n", pool.HashKey)
-		case "random":
-			builder.WriteString("    random two least_conn;\n")
-		}
-		for _, server := range pool.Servers {
-			host := server.Host
-			if net.ParseIP(host) != nil && strings.Contains(host, ":") {
-				host = "[" + host + "]"
-			}
-			fmt.Fprintf(&builder, "    server %s:%d weight=%d max_fails=%d fail_timeout=%ds", host, server.Port, server.Weight, server.MaxFails, server.FailTimeout)
-			if server.Backup {
-				builder.WriteString(" backup")
-			}
-			if server.Down {
-				builder.WriteString(" down")
-			}
-			builder.WriteString(";\n")
-		}
-		builder.WriteString("}\n\n")
+		builder.WriteString(renderUpstream(pool))
 	}
 	for _, rule := range state.StreamRules {
 		if !rule.Enabled {
@@ -894,9 +914,9 @@ func renderStreamPrelude(state State) string {
 		}
 		if rule.TLSMode == "passthrough" && len(rule.SNIRoutes) > 0 {
 			fmt.Fprintf(&builder, "map $ssl_preread_server_name $fnproxy_stream_backend_%s {\n", rule.ID)
-			fmt.Fprintf(&builder, "    default %s;\n", streamTarget(rule.UpstreamPoolID, rule.UpstreamHost, rule.UpstreamPort))
+			fmt.Fprintf(&builder, "    default %s;\n", streamTarget(pools, rule.UpstreamPoolID, rule.UpstreamHost, rule.UpstreamPort))
 			for _, route := range rule.SNIRoutes {
-				target := streamTarget(route.UpstreamPoolID, route.UpstreamHost, route.UpstreamPort)
+				target := streamTarget(pools, route.UpstreamPoolID, route.UpstreamHost, route.UpstreamPort)
 				for _, name := range route.ServerNames {
 					fmt.Fprintf(&builder, "    %s %s;\n", name, target)
 				}
@@ -907,7 +927,7 @@ func renderStreamPrelude(state State) string {
 	return builder.String()
 }
 
-func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]CertificateMeta, settings Settings) (string, error) {
+func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]CertificateMeta, settings Settings, pools map[string]domain.UpstreamPool) (string, error) {
 	var builder strings.Builder
 	builder.WriteString("server {\n")
 	address := rule.ListenAddress
@@ -923,7 +943,10 @@ func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]Cert
 	}
 	fmt.Fprintf(&builder, "    listen %s", listen)
 	if rule.Protocol == "udp" {
-		builder.WriteString(" udp reuseport")
+		builder.WriteString(" udp")
+		if rule.Omissions == nil || !rule.Omissions.UDPReusePort {
+			builder.WriteString(" reuseport")
+		}
 	}
 	if rule.TLSMode == "terminate" {
 		builder.WriteString(" ssl")
@@ -955,12 +978,17 @@ func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]Cert
 	for _, item := range rule.Deny {
 		fmt.Fprintf(&builder, "    deny %s;\n", item)
 	}
-	target := streamTarget(rule.UpstreamPoolID, rule.UpstreamHost, rule.UpstreamPort)
+	target := streamTarget(pools, rule.UpstreamPoolID, rule.UpstreamHost, rule.UpstreamPort)
 	if rule.TLSMode == "passthrough" && len(rule.SNIRoutes) > 0 {
 		target = "$fnproxy_stream_backend_" + rule.ID
 	}
 	fmt.Fprintf(&builder, "    proxy_pass %s;\n", target)
-	fmt.Fprintf(&builder, "    proxy_connect_timeout %ds;\n    proxy_timeout %ds;\n", rule.ConnectTimeoutSeconds, rule.ProxyTimeoutSeconds)
+	if rule.Omissions == nil || !rule.Omissions.ConnectTimeout || rule.ConnectTimeoutSeconds != 60 {
+		fmt.Fprintf(&builder, "    proxy_connect_timeout %ds;\n", rule.ConnectTimeoutSeconds)
+	}
+	if rule.Omissions == nil || !rule.Omissions.ProxyTimeout || rule.ProxyTimeoutSeconds != 600 {
+		fmt.Fprintf(&builder, "    proxy_timeout %ds;\n", rule.ProxyTimeoutSeconds)
+	}
 	if rule.Protocol == "udp" && rule.UDPResponses > 0 {
 		fmt.Fprintf(&builder, "    proxy_responses %d;\n", rule.UDPResponses)
 	}
@@ -976,10 +1004,12 @@ func (m *Manager) renderStreamRule(rule domain.StreamRule, certs map[string]Cert
 	if rule.AccessLog && settings.MenuEnabled("errors") {
 		fmt.Fprintf(&builder, "    access_log %s fnproxy_stream_metrics_%s buffer=32k flush=1s;\n", nginxQuote(m.paths.StreamMetricsLog()), rule.ID)
 	} else if !rule.AccessLog || !settings.MenuEnabled("logs") {
-		builder.WriteString("    access_log off;\n")
+		if rule.Omissions == nil || !rule.Omissions.AccessLog || rule.AccessLog {
+			builder.WriteString("    access_log off;\n")
+		}
 	}
 	builder.WriteString("}\n")
-	return builder.String(), nil
+	return withConfigComments(builder.String(), rule.Comments), nil
 }
 
 func effectiveWorkerConnections(settings Settings) int {
@@ -1071,35 +1101,7 @@ func renderHTTPPrelude(state State, cacheRoot string) string {
 		if pool.Protocol != "http" {
 			continue
 		}
-		fmt.Fprintf(&builder, "upstream fnproxy_up_%s {\n", pool.ID)
-		switch pool.Strategy {
-		case "least_conn":
-			builder.WriteString("    least_conn;\n")
-		case "ip_hash":
-			builder.WriteString("    ip_hash;\n")
-		case "hash":
-			fmt.Fprintf(&builder, "    hash %s consistent;\n", pool.HashKey)
-		case "random":
-			builder.WriteString("    random two least_conn;\n")
-		}
-		for _, server := range pool.Servers {
-			host := server.Host
-			if net.ParseIP(host) != nil && strings.Contains(host, ":") {
-				host = "[" + host + "]"
-			}
-			fmt.Fprintf(&builder, "    server %s:%d weight=%d max_fails=%d fail_timeout=%ds", host, server.Port, server.Weight, server.MaxFails, server.FailTimeout)
-			if server.Backup {
-				builder.WriteString(" backup")
-			}
-			if server.Down {
-				builder.WriteString(" down")
-			}
-			builder.WriteString(";\n")
-		}
-		if pool.Keepalive > 0 {
-			fmt.Fprintf(&builder, "    keepalive %d;\n    keepalive_requests %d;\n    keepalive_time %ds;\n    keepalive_timeout %ds;\n", pool.Keepalive, pool.KeepaliveRequests, pool.KeepaliveTime, pool.KeepaliveTimeout)
-		}
-		builder.WriteString("}\n\n")
+		builder.WriteString(renderUpstream(pool))
 	}
 	for _, rule := range state.Rules {
 		if !rule.Enabled {
@@ -1228,7 +1230,9 @@ func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateM
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(&builder, "    client_max_body_size %s;\n", bodySize)
+	if !rule.InheritNginxBodySize || bodySize != "1m" {
+		fmt.Fprintf(&builder, "    client_max_body_size %s;\n", bodySize)
+	}
 
 	if rule.RedirectToHTTPS {
 		targetPort := ""
@@ -1237,25 +1241,25 @@ func (m *Manager) renderRuleServer(rule ProxyRule, certs map[string]CertificateM
 		}
 		fmt.Fprintf(&builder, "    return 308 https://$host%s$request_uri;\n", targetPort)
 		builder.WriteString("}\n")
-		return builder.String(), nil
+		return withConfigComments(builder.String(), rule.Comments), nil
 	}
 
-	if err := m.renderHTTPLocation(&builder, rule, "/", "prefix", rule.RootLocation, rule.ID, waf, 0); err != nil {
+	if err := m.renderHTTPLocation(&builder, rule, "/", "prefix", rule.RootLocation, rule.ID, waf, 0, pools); err != nil {
 		return "", err
 	}
 	for index, location := range rule.Locations {
 		if !location.Enabled {
 			continue
 		}
-		if err := m.renderHTTPLocation(&builder, rule, location.Path, location.Match, location.Settings, rule.ID+"_"+location.ID, waf, index+1); err != nil {
+		if err := m.renderHTTPLocation(&builder, rule, location.Path, location.Match, location.Settings, rule.ID+"_"+location.ID, waf, index+1, pools); err != nil {
 			return "", err
 		}
 	}
 	builder.WriteString("}\n")
-	return builder.String(), nil
+	return withConfigComments(builder.String(), rule.Comments), nil
 }
 
-func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, path, match string, settings domain.LocationSettings, cacheID string, waf *domain.WAFInstance, branch int) error {
+func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, path, match string, settings domain.LocationSettings, cacheID string, waf *domain.WAFInstance, branch int, pools map[string]domain.UpstreamPool) error {
 	prefix := ""
 	switch match {
 	case "exact":
@@ -1386,9 +1390,9 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		if settings.UpstreamScheme == "https" {
 			grpcScheme = "grpcs"
 		}
-		fmt.Fprintf(builder, "        grpc_pass %s;\n", renderHTTPBackend(settings, grpcScheme))
+		fmt.Fprintf(builder, "        grpc_pass %s;\n", renderHTTPBackend(pools, settings, grpcScheme))
 	case "fastcgi":
-		fmt.Fprintf(builder, "        fastcgi_pass %s;\n", renderHTTPBackend(settings, ""))
+		fmt.Fprintf(builder, "        fastcgi_pass %s;\n", renderHTTPBackend(pools, settings, ""))
 		builder.WriteString("        fastcgi_param QUERY_STRING $query_string;\n")
 		builder.WriteString("        fastcgi_param REQUEST_METHOD $request_method;\n")
 		builder.WriteString("        fastcgi_param CONTENT_TYPE $content_type;\n")
@@ -1399,7 +1403,7 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		builder.WriteString("        fastcgi_param REMOTE_ADDR $remote_addr;\n")
 		builder.WriteString("        fastcgi_param SERVER_NAME $server_name;\n")
 	case "uwsgi":
-		fmt.Fprintf(builder, "        uwsgi_pass %s;\n", renderHTTPBackend(settings, ""))
+		fmt.Fprintf(builder, "        uwsgi_pass %s;\n", renderHTTPBackend(pools, settings, ""))
 		builder.WriteString("        uwsgi_param QUERY_STRING $query_string;\n")
 		builder.WriteString("        uwsgi_param REQUEST_METHOD $request_method;\n")
 		builder.WriteString("        uwsgi_param CONTENT_TYPE $content_type;\n")
@@ -1409,7 +1413,7 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		builder.WriteString("        uwsgi_param REMOTE_ADDR $remote_addr;\n")
 		builder.WriteString("        uwsgi_param SERVER_NAME $server_name;\n")
 	case "scgi":
-		fmt.Fprintf(builder, "        scgi_pass %s;\n", renderHTTPBackend(settings, ""))
+		fmt.Fprintf(builder, "        scgi_pass %s;\n", renderHTTPBackend(pools, settings, ""))
 		builder.WriteString("        scgi_param CONTENT_LENGTH $content_length;\n")
 		builder.WriteString("        scgi_param SCGI 1;\n")
 		builder.WriteString("        scgi_param REQUEST_METHOD $request_method;\n")
@@ -1419,11 +1423,11 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 		builder.WriteString("        scgi_param REMOTE_ADDR $remote_addr;\n")
 	case "memcached":
 		builder.WriteString("        set $memcached_key $uri;\n")
-		fmt.Fprintf(builder, "        memcached_pass %s;\n", renderHTTPBackend(settings, ""))
+		fmt.Fprintf(builder, "        memcached_pass %s;\n", renderHTTPBackend(pools, settings, ""))
 	case "status":
 		builder.WriteString("        stub_status;\n")
 	default:
-		target := renderHTTPBackend(settings, settings.UpstreamScheme)
+		target := renderHTTPBackend(pools, settings, settings.UpstreamScheme)
 		if settings.UpstreamPath != "" {
 			if waf == nil {
 				target += settings.UpstreamPath
@@ -1457,9 +1461,9 @@ func (m *Manager) renderHTTPLocation(builder *strings.Builder, rule ProxyRule, p
 	return nil
 }
 
-func renderHTTPBackend(settings domain.LocationSettings, scheme string) string {
+func renderHTTPBackend(pools map[string]domain.UpstreamPool, settings domain.LocationSettings, scheme string) string {
 	if settings.UpstreamPoolID != "" {
-		backend := "fnproxy_up_" + settings.UpstreamPoolID
+		backend := pools[settings.UpstreamPoolID].ConfigName()
 		if scheme != "" {
 			return scheme + "://" + backend
 		}
@@ -1493,7 +1497,9 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 	if version == "" {
 		version = "1.1"
 	}
-	fmt.Fprintf(builder, "        proxy_http_version %s;\n", version)
+	if !settings.InheritProxyDefaults || settings.ProxyHTTPVersion != "" {
+		fmt.Fprintf(builder, "        proxy_http_version %s;\n", version)
+	}
 	if !settings.ExplicitProxyHeaders {
 		if rule.PreserveHost {
 			builder.WriteString("        proxy_set_header Host $fnproxy_client_host;\n")
@@ -1518,18 +1524,20 @@ func (m *Manager) renderProxySettings(builder *strings.Builder, rule ProxyRule, 
 	if rule.Authentication.Enabled && !rule.Authentication.ForwardAuthorization {
 		builder.WriteString("        proxy_set_header Authorization \"\";\n")
 	}
-	if settings.ConnectTimeoutSeconds != 0 {
-		rule.ConnectTimeoutSeconds = settings.ConnectTimeoutSeconds
+	// Auto-imported locations inherit absent directives from the surrounding
+	// Nginx context. Explicit location values and rule-level edits still apply.
+	writeTimeout := func(name string, local, parent int) {
+		if local == 0 {
+			if settings.InheritProxyDefaults && parent == 60 {
+				return
+			}
+			local = parent
+		}
+		fmt.Fprintf(builder, "        %s %ds;\n", name, local)
 	}
-	if settings.ReadTimeoutSeconds != 0 {
-		rule.ReadTimeoutSeconds = settings.ReadTimeoutSeconds
-	}
-	if settings.SendTimeoutSeconds != 0 {
-		rule.SendTimeoutSeconds = settings.SendTimeoutSeconds
-	}
-	fmt.Fprintf(builder, "        proxy_connect_timeout %ds;\n", rule.ConnectTimeoutSeconds)
-	fmt.Fprintf(builder, "        proxy_read_timeout %ds;\n", rule.ReadTimeoutSeconds)
-	fmt.Fprintf(builder, "        proxy_send_timeout %ds;\n", rule.SendTimeoutSeconds)
+	writeTimeout("proxy_connect_timeout", settings.ConnectTimeoutSeconds, rule.ConnectTimeoutSeconds)
+	writeTimeout("proxy_read_timeout", settings.ReadTimeoutSeconds, rule.ReadTimeoutSeconds)
+	writeTimeout("proxy_send_timeout", settings.SendTimeoutSeconds, rule.SendTimeoutSeconds)
 	if settings.ProxyBuffering != nil {
 		fmt.Fprintf(builder, "        proxy_buffering %s;\n", onOff(*settings.ProxyBuffering))
 	} else if rule.Streaming || rule.WebSocket {

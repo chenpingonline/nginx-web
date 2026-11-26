@@ -111,7 +111,7 @@ export function rawPool(node: Node): Extract<ConfigForm, {kind: "upstreams"}> {
   return { kind: "upstreams", id: pool.id, value: pool };
 }
 
-export function rawStream(node: Node, state: State): ConfigForm {
+export function rawStream(node: Node, state: State, preserveOmissions = false, pools: ReadonlyMap<string, string> = new Map()): Extract<ConfigForm, {kind: "streams"}> {
   const nodes = node.children ?? [];
   const listen = nodes.find((d) => d.words[0] === "listen"),
     pass = nodes.find((d) => d.words[0] === "proxy_pass");
@@ -174,9 +174,11 @@ export function rawStream(node: Node, state: State): ConfigForm {
     if (d === listen) continue;
     if (d === pass && !rest.length) {
       const pool = /^fnproxy_stream_([a-f0-9]+)$/.exec(v);
-      if (pool) rule.upstream_pool_id = pool[1];
+      if (pools.has(v?.toLowerCase())) rule.upstream_pool_id = pools.get(v.toLowerCase())!;
+      else if (pool) rule.upstream_pool_id = pool[1];
       else {
         const target = endpoint(v, d);
+        if (pools.has(target.host.toLowerCase())) unsupported(d);
         rule.upstream_host = target.host;
         rule.upstream_port = target.port;
       }
@@ -208,6 +210,13 @@ export function rawStream(node: Node, state: State): ConfigForm {
     if (!match || key !== cert.replace(/fullchain\.pem$/, "privkey.pem"))
       unsupported(node);
     rule.certificate_id = match[1];
+  }
+  if (preserveOmissions) {
+    const names = new Set(nodes.map(d => d.words[0]));
+    rule.omissions = {
+      connect_timeout: !names.has("proxy_connect_timeout"), proxy_timeout: !names.has("proxy_timeout"),
+      access_log: !names.has("access_log"), udp_reuseport: protocol === "udp" && !options.includes("reuseport"),
+    };
   }
   return { kind: "streams", id, value: rule };
 }

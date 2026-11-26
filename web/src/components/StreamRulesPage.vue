@@ -81,6 +81,8 @@ const blankRoute = (): SNIRoute => ({
   upstream_port: 443,
 });
 const blank = (): StreamRuleInput => ({
+  comments: undefined,
+  omissions: undefined,
   name: "",
   enabled: true,
   protocol: "tcp",
@@ -362,7 +364,7 @@ defineExpose({ show, close: () => { open.value = false; } });
           <div class="field">
             <label>连接超时</label
             ><NginxQuantityInput unit="seconds"
-              v-model="form.connect_timeout_seconds"
+              v-model="form.connect_timeout_seconds" @update:model-value="form.omissions && (form.omissions.connect_timeout = false)"
               class="input"
               min="1"
               max="600"
@@ -371,7 +373,7 @@ defineExpose({ show, close: () => { open.value = false; } });
           <div class="field">
             <label>会话超时</label
             ><NginxQuantityInput unit="seconds"
-              v-model="form.proxy_timeout_seconds"
+              v-model="form.proxy_timeout_seconds" @update:model-value="form.omissions && (form.omissions.proxy_timeout = false)"
               class="input"
               min="1"
               max="86400"
@@ -479,7 +481,7 @@ defineExpose({ show, close: () => { open.value = false; } });
           <div class="field">
             <label>日志与限额</label
             ><label class="checkbox-row"
-              ><input v-model="form.access_log" type="checkbox" />记录 Stream
+              ><input v-model="form.access_log" type="checkbox" @change="form.omissions && (form.omissions.access_log = false)" />记录 Stream
               访问日志</label
             ><label class="stream-connection-limit-label">单 IP 最大连接数</label
             ><input

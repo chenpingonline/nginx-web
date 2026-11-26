@@ -45,6 +45,8 @@ type Settings struct {
 }
 
 type ProxyRule struct {
+	Comments              []ConfigComment    `json:"comments,omitempty"`
+	InheritNginxBodySize  bool               `json:"inherit_nginx_body_size,omitempty"`
 	ListenType            string             `json:"listen_type,omitempty"`
 	GroupID               string             `json:"group_id,omitempty"`
 	InheritFields         []string           `json:"inherit_fields,omitempty"`
@@ -301,6 +303,9 @@ func (rule ProxyRule) RequestBodySize() (string, error) {
 }
 
 func ValidateRule(rule ProxyRule, certs map[string]CertificateMeta, pools ...map[string]UpstreamPool) error {
+	if err := validateConfigComments(rule.Comments); err != nil {
+		return err
+	}
 	if err := ValidateListenType(rule.ListenType); err != nil {
 		return err
 	}
@@ -436,6 +441,7 @@ func ValidateState(state State) error {
 		certs[cert.ID] = cert
 	}
 	pools := make(map[string]UpstreamPool, len(state.UpstreamPools))
+	configNames := make(map[string]bool)
 	poolNames := make(map[string]struct{}, len(state.UpstreamPools))
 	for _, pool := range state.UpstreamPools {
 		if err := ValidateUpstreamPool(pool); err != nil {
@@ -448,6 +454,11 @@ func ValidateState(state State) error {
 		if _, exists := poolNames[key]; exists {
 			return errors.New("存在重复的转发服务组名称")
 		}
+		configName := pool.Protocol + "/" + strings.ToLower(pool.ConfigName())
+		if configNames[configName] {
+			return fmt.Errorf("重复的 Nginx upstream 名称 %q", pool.ConfigName())
+		}
+		configNames[configName] = true
 		pools[pool.ID] = pool
 		poolNames[key] = struct{}{}
 	}

@@ -26,7 +26,7 @@ function fail(line: number, reason: string): never {
 
 // Keep file offsets for opening the original block. Only unquoted delimiters
 // end directives; variable braces, escapes and comments are part of the lexer.
-export function parseConfig(source: string, firstLine = 1): Directive[] {
+export function parseConfig(source: string, firstLine = 1, onComment?: (offset: number, line: number) => void): Directive[] {
   if (source.length > 1048576) throw new Error("配置不能超过 1 MB");
   const root: Directive[] = [],
     stack: Directive[][] = [root];
@@ -59,6 +59,7 @@ export function parseConfig(source: string, firstLine = 1): Directive[] {
     const variableBrace = afterDollar && c === "{";
     afterDollar = false;
     if (!quote && c === "#" && !active) {
+      onComment?.(i, line);
       while (i + 1 < source.length && source[i + 1] !== "\n") i++;
       continue;
     }
@@ -356,7 +357,7 @@ const gatewayParams: Record<string,string[]> = {
   scgi: ["CONTENT_LENGTH $content_length", "SCGI 1", "REQUEST_METHOD $request_method", "REQUEST_URI $request_uri", "QUERY_STRING $query_string", ...requestParams.slice(1)],
 };
 const managedHTTPPool = /^fnproxy_up_([a-f0-9]{12,64})$/;
-function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, staticRoot = "", indexFiles = ["index.html"]) {
+function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, staticRoot = "", indexFiles = ["index.html"], preservePoolNames = false) {
   const [, ...args] = node.words;
   const path = args[args.length - 1];
   const modifiers = new Map([["=", "exact"], ["~", "regex"], ["~*", "regex_i"], ["^~", "priority_prefix"]]);
@@ -396,8 +397,9 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
       const address = /^(?:(grpcs?):\/\/)?(\[[\da-fA-F:]+\]|[\w.-]+)(?::(\d+))?$/.exec(value);
       if (!address || (name === "grpc_pass") !== !!address[1]) unsupported(handler);
       const pool = !address[3] && (managedHTTPPool.exec(address[2])?.[1] ?? pools.get(address[2].toLowerCase()));
+      if (preservePoolNames && address[3] && pools.has(address[2].toLowerCase())) unsupported(handler);
       // gRPC uses its upstream name as the default :authority.
-      if (name === "grpc_pass" && pools.has(address[2].toLowerCase()) && !managedHTTPPool.test(address[2])) unsupported(handler);
+      if (!preservePoolNames && name === "grpc_pass" && pools.has(address[2].toLowerCase()) && !managedHTTPPool.test(address[2])) unsupported(handler);
       if (!address[3] && !pool) unsupported(handler);
       Object.assign(settings,{backend_type:name.slice(0,-5),upstream_scheme:address[1] === "grpcs" ? "https" : "http",
         upstream_host:address[2].replace(/^\[|\]$/g,""),upstream_port:Number(address[3] || 0),upstream_pool_id:pool || ""});
@@ -510,6 +512,7 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
         );
       const host = target?.[2] ?? "";
       const pool = !target?.[3] && (managedHTTPPool.exec(host)?.[1] ?? pools.get(host.toLowerCase()));
+      if (preservePoolNames && target?.[3] && pools.has(host.toLowerCase())) unsupported(d);
       // Bare names may refer to an upstream group in a different file.
       if (
         !target || (["regex", "regex_i", "named"].includes(match) && !!target[4]) ||
@@ -520,7 +523,7 @@ function convertLocation(node: Directive, pools: ReadonlyMap<string, string>, st
       settings.upstream_scheme = target[1] as "http" | "https";
       if (pool) {
         settings.upstream_pool_id = pool;
-        if (host !== "fnproxy_up_" + pool) renamedPool = host;
+        if (!preservePoolNames && host !== "fnproxy_up_" + pool) renamedPool = host;
       }
       settings.upstream_host = target[2].replace(/^\[|\]$/g, "");
       settings.upstream_port = Number(
@@ -590,7 +593,7 @@ function directiveQuantity(value: string, unit: QuantityUnit, node: Directive): 
   }
 }
 
-export function importBlocks(source: string, target: string, firstLine = 1, pools: ReadonlyMap<string, string> = new Map()) {
+export function importBlocks(source: string, target: string, firstLine = 1, pools: ReadonlyMap<string, string> = new Map(), preserveOmissions = false) {
   const blocks = parseConfig(source, firstLine);
   if (!blocks.length) throw new Error("请输入 server 或 location 配置块");
   if (blocks.length === 1 && blocks[0].words[0] === "location") {
@@ -653,7 +656,7 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
     if (tls ? !certID || key !== cert.replace(/fullchain\.pem$/, "privkey.pem") : !!(cert || key || http2))
       throw new UnsupportedFormError(block.line, "HTTPS 规则需要目标机已导入的证书和匹配的私钥路径");
     if (catchAll && domains.join(" ") !== "_") throw new UnsupportedFormError(block.line, "默认站点域名无法完整还原");
-    const locations = paths.map(path => convertLocation(path, pools, staticRoot, indexFiles));
+    const locations = paths.map(path => convertLocation(path, pools, staticRoot, indexFiles, preserveOmissions));
     if (staticRoot && !redirectPort && !locations.some(l => l.path === "/" && ["prefix", "priority_prefix"].includes(l.match))) {
       // A server-level root also serves requests unmatched by explicit locations.
       locations.unshift(convertLocation({...block, words: ["location", "/"], children: []}, pools, staticRoot, indexFiles));
@@ -668,6 +671,11 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
         block.line,
         "结构化导入需要明确的 listen、server_name 和一个根代理路径",
       );
+    if (preserveOmissions) {
+      for (const location of locations) {
+        if (location.settings.backend_type === "proxy") location.settings.inherit_proxy_defaults = true;
+      }
+    }
     const root: Partial<LocationSettings> = roots[0]?.settings ?? {};
     return {
       id: tracking || newID(),
@@ -676,7 +684,7 @@ export function importBlocks(source: string, target: string, firstLine = 1, pool
       domains: catchAll ? ["*"] : domains,
       listen_port: port,
       listen_type: families.size === 2 ? "dual" : families.has("ipv6") ? "ipv6" : "ipv4",
-      ...(bodyLimit ?? { client_max_body_mb: 1 }),
+      ...(bodyLimit ?? { client_max_body_mb: 1, ...(preserveOmissions && { inherit_nginx_body_size: true }) }),
       connect_timeout_seconds: 60, read_timeout_seconds: 60, send_timeout_seconds: 60,
       upstream_host: root.upstream_host ?? "127.0.0.1",
       upstream_port: root.upstream_port ?? 8080,

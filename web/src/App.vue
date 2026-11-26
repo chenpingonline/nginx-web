@@ -34,6 +34,7 @@ import {
   PhXCircle,
 } from "@phosphor-icons/vue";
 import { errorMessage, jsonBody, request } from "./api";
+import { createCustomConfig } from "./customConfigCreate";
 import { highlightLog, searchLogLines } from "./logHighlight";
 const fnosMode = !__STANDALONE__;
 const appVersion = __APP_VERSION__;
@@ -410,6 +411,7 @@ async function finishSourceEdit(apply: boolean) {
 async function keepSource(source: string, stream: boolean, line?: number) {
   importing.value = false;
   openCustomConfig();
+  keepCustomFile.value = true;
   if (stream) customConfigForm.name = "custom-config.stream";
   customConfigForm.content = source;
   if (line !== undefined) {
@@ -554,21 +556,38 @@ let configCopiedTimer: number | undefined;
 const parameterEntry = ref<{file: CustomConfig; title: string; start?: number}>();
 const customConfigOpen = ref(false);
 const customConfigOriginal = ref("");
-const customConfigForm = reactive<CustomConfig>({ name: "custom-config.conf", content: "server {\n    listen 8080;\n    server_name example.com;\n    return 200;\n}\n" });
+const keepCustomFile = ref(false);
+const conversionNotice = ref<{name: string; content: string; reason: string}>();
+const exampleCustomConfig = "server {\n    listen 8080;\n    server_name example.com;\n    location / { return 200; }\n}\n";
+const customConfigForm = reactive<CustomConfig>({ name: "custom-config.conf", content: exampleCustomConfig });
 function openCustomConfig(config?: CustomConfig) {
+  keepCustomFile.value = false;
   customConfigOriginal.value = config?.name ?? "";
   customConfigForm.name = config?.name ?? "custom-config.conf";
-  customConfigForm.content = config?.content ?? "server {\n    listen 8080;\n    server_name example.com;\n    return 200;\n}\n";
+  customConfigForm.content = config?.content ?? exampleCustomConfig;
   customConfigOpen.value = true;
 }
 async function saveCustomConfig() {
   const original = customConfigOriginal.value;
-  const saved = await mutate(() => request<CustomConfig>(original ? `/custom-configs/${encodeURIComponent(original)}` : "/custom-configs", { method: original ? "PUT" : "POST", body: jsonBody(customConfigForm) }));
-  if (!saved) return;
+  const file = {...customConfigForm};
+  const result = await mutate(async () => {
+    if (!original && !keepCustomFile.value && state.value) return createCustomConfig(file, state.value);
+    const saved = await request<CustomConfig>(original ? `/custom-configs/${encodeURIComponent(original)}` : "/custom-configs", {
+      method: original ? "PUT" : "POST", body: jsonBody(file),
+    });
+    return {kind: "file" as const, name: saved.name, reason: ""};
+  });
+  if (!result) return;
   customConfigOpen.value = false;
-  configTab.value = saved.name;
-  toast("自定义配置已保存为草稿，请校验后应用", "success");
   await loadCore(true);
+  if (result.kind === "rules") {
+    toast(`已保存为 ${result.count} 条${file.name.endsWith(".stream") ? " TCP/UDP" : " HTTP(S)"} 代理表单规则${result.pools ? `和 ${result.pools} 个转发服务组` : ""}，请校验后应用`, "success");
+  } else {
+    configTab.value = result.name;
+    const saved = selectedCustomConfig.value;
+    conversionNotice.value = result.reason && saved ? {...saved, reason: result.reason} : undefined;
+    toast("自定义配置已保存为草稿，请校验后应用", "success");
+  }
 }
 async function deleteCustomConfig(config: CustomConfig) {
   if (!(await ask("删除自定义配置", `确定删除“${config.name}”吗？删除将保存为草稿，应用后才会从 Nginx 配置中移除。`))) return;
@@ -1731,6 +1750,9 @@ onBeforeUnmount(() => {
                   <option v-for="file in category.files" :key="file.key" :value="file.key">{{ file.label }}</option>
                 </AppSelect>
               </nav>
+              <p v-if="conversionNotice && selectedCustomConfig?.name === conversionNotice.name && selectedCustomConfig.content === conversionNotice.content" class="notice warning" role="status">
+                无法转换为表单（{{ conversionNotice.reason }}）。已按原文保存，可继续校验和应用。
+              </p>
               <div class="config-current-file">
                 <span>{{ configTab === 'master' ? 'nginx.conf' : configTab }}</span>
                 <button
@@ -1777,17 +1799,17 @@ onBeforeUnmount(() => {
   <div v-if="customConfigOpen" class="modal-backdrop" @mousedown.self="!busy && (customConfigOpen = false)">
     <section class="modal custom-config-modal" role="dialog" aria-modal="true" aria-labelledby="custom-config-title">
       <header class="modal-header">
-        <div><h2 id="custom-config-title">{{ customConfigOriginal ? '编辑自定义配置' : '新建自定义配置' }}</h2><p>HTTP 配置使用 .conf，TCP/UDP Stream 配置使用 .stream；保存后需校验并应用。</p></div>
+        <div><h2 id="custom-config-title">{{ customConfigOriginal ? '编辑自定义配置' : '新建自定义配置' }}</h2><p>{{ customConfigOriginal || keepCustomFile ? "保存后可校验并应用。" : "可完整转换的配置将保存为表单规则，其余按原文保存。" }}</p></div>
         <button class="icon-button modal-close" aria-label="关闭" :disabled="busy" @click="customConfigOpen = false"><PhX :size="20" /></button>
       </header>
       <form class="modal-body custom-config-form" @submit.prevent="saveCustomConfig">
         <div class="field custom-config-name-field">
           <label for="custom-config-name">文件名</label>
-          <input id="custom-config-name" v-model.trim="customConfigForm.name" class="input" required maxlength="80" pattern="custom-[A-Za-z0-9][A-Za-z0-9._-]{0,71}\.(conf|stream)" placeholder="custom-1panel.conf" />
+          <input id="custom-config-name" :disabled="busy" v-model.trim="customConfigForm.name" class="input" required maxlength="80" pattern="custom-[A-Za-z0-9][A-Za-z0-9._\-]{0,71}\.(conf|stream)" placeholder="custom-1panel.conf" />
           <span class="field-help">必须以 custom- 开头，并以 .conf 或 .stream 结尾。</span>
         </div>
         <label for="custom-config-content">配置内容</label>
-        <ConfigTextEditor ref="configEditor" v-model="customConfigForm.content" />
+        <ConfigTextEditor ref="configEditor" v-model="customConfigForm.content" :readonly="busy" />
         <div class="notice warning">自定义指令不会经过结构化安全限制。应用前会执行 nginx -t；校验失败时不会替换当前运行配置。</div>
         <footer class="modal-footer"><button type="button" class="button ghost" :disabled="busy" @click="customConfigOpen = false">取消</button><button type="submit" class="button primary" :disabled="busy">{{ busy ? '保存中…' : '保存为草稿' }}</button></footer>
       </form>

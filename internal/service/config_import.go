@@ -10,7 +10,7 @@ import (
 	"github.com/chenpingonline/nginx-web/internal/pathsecurity"
 )
 
-// An import contains either new HTTP servers or a single location to append.
+// New servers in one file are previewed and committed as a batch.
 // Stable IDs let the UI preview and commit exactly the same generated text.
 type ImportSource struct {
 	Name     string `json:"name"`
@@ -51,12 +51,14 @@ func (s *AppService) DeleteSourceBlock(source ImportSource) error {
 }
 
 type ConfigImport struct {
-	Source   *ImportSource         `json:"source,omitempty"`
-	Pools    []domain.UpstreamPool `json:"pools,omitempty"`
-	Rules    []domain.ProxyRule    `json:"rules"`
-	Target   string                `json:"target"`
-	Location *domain.LocationRule  `json:"location"`
-	Expected []string              `json:"expected,omitempty"`
+	NewFileName string                `json:"new_file_name,omitempty"`
+	Streams     []domain.StreamRule   `json:"streams,omitempty"`
+	Source      *ImportSource         `json:"source,omitempty"`
+	Pools       []domain.UpstreamPool `json:"pools,omitempty"`
+	Rules       []domain.ProxyRule    `json:"rules"`
+	Target      string                `json:"target"`
+	Location    *domain.LocationRule  `json:"location"`
+	Expected    []string              `json:"expected,omitempty"`
 }
 
 func (s *AppService) ImportConfig(input ConfigImport, save bool) ([]string, error) {
@@ -78,6 +80,27 @@ func (s *AppService) InspectSourceRule(input ConfigImport) (map[string]any, erro
 func (s *AppService) importConfig(input ConfigImport, save bool, normalized *domain.ProxyRule) ([]string, error) {
 	var output []string
 	prepare := func(state *State) error {
+		stream := len(input.Streams) != 0
+		if input.NewFileName != "" {
+			if err := domain.ValidateCustomConfigName(input.NewFileName); err != nil {
+				return err
+			}
+			if !state.Settings.MenuEnabled("config") || input.Source != nil || input.Location != nil || input.Target != "" ||
+				stream != strings.HasSuffix(input.NewFileName, ".stream") {
+				return errors.New("自定义文件类型与代理规则不匹配")
+			}
+			for _, existing := range state.CustomConfigs {
+				if strings.EqualFold(existing.Name, input.NewFileName) {
+					return errors.New("存在重复的自定义配置文件名")
+				}
+			}
+			if !stream && !state.Settings.MenuEnabled("rules") {
+				return errors.New("HTTP 代理菜单已关闭")
+			}
+		}
+		if stream && (input.NewFileName == "" || len(input.Rules) != 0 || len(input.Streams) > 100 || !state.Settings.MenuEnabled("streams")) {
+			return errors.New("每次最多转换 100 个 server 块，并需启用 TCP/UDP 代理")
+		}
 		if input.Source != nil {
 			if len(input.Rules) != 1 || input.Location != nil || !state.Settings.MenuEnabled("rules") || !state.Settings.MenuEnabled("config") {
 				return errors.New("无法转换此自定义配置")
@@ -88,22 +111,36 @@ func (s *AppService) importConfig(input ConfigImport, save bool, normalized *dom
 		}
 		now := time.Now().UTC()
 		if len(input.Pools) > 0 {
-			if input.Source != nil || input.Location != nil || len(input.Rules) == 0 || len(input.Pools) > 100 {
-				return errors.New("转发服务组须与 HTTP 站点一起导入，每次最多 100 个服务组")
+			if input.Source != nil || input.Location != nil || len(input.Rules)+len(input.Streams) == 0 || len(input.Pools) > 100 {
+				return errors.New("转发服务组须与站点一起导入，每次最多 100 个服务组")
 			}
-			if !state.Settings.MenuEnabled("upstreams") || !state.Settings.MenuEnabled("rules") {
-				return errors.New("请先启用 HTTP 代理和转发服务组")
+			if !state.Settings.MenuEnabled("upstreams") || (!stream && !state.Settings.MenuEnabled("rules")) {
+				return errors.New("请先启用代理和转发服务组")
 			}
 			for _, pool := range input.Pools {
-				if !domain.ValidID(pool.ID) || pool.Protocol != "http" {
-					return errors.New("HTTP 转发服务组标识或协议无效")
+				if !domain.ValidID(pool.ID) || (stream && pool.Protocol != "stream") || (!stream && pool.Protocol != "http") {
+					return errors.New("转发服务组标识或协议无效")
 				}
 				pool.CreatedAt, pool.UpdatedAt = now, now
 				state.UpstreamPools = append(state.UpstreamPools, pool)
 			}
 		}
 		var ids []string
-		if input.Location != nil {
+		if stream {
+			seen := make(map[string]bool)
+			for _, r := range state.StreamRules {
+				seen[r.ID] = true
+			}
+			for _, r := range input.Streams {
+				if !domain.ValidID(r.ID) || seen[r.ID] {
+					return errors.New("TCP/UDP 规则标识无效或已存在")
+				}
+				seen[r.ID] = true
+				r.CreatedAt, r.UpdatedAt = now, now
+				state.StreamRules = append(state.StreamRules, r)
+				ids = append(ids, r.ID)
+			}
+		} else if input.Location != nil {
 			if !domain.ValidID(input.Target) || len(input.Rules) != 0 {
 				return errors.New("请选择一个目标代理")
 			}
@@ -171,7 +208,7 @@ func (s *AppService) importConfig(input ConfigImport, save bool, normalized *dom
 			output = append(output, content)
 		}
 		for _, id := range ids {
-			content, err := s.nginx.RuleConfig(*state, id, false)
+			content, err := s.nginx.RuleConfig(*state, id, stream)
 			if err != nil {
 				return err
 			}

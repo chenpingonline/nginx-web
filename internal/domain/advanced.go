@@ -58,6 +58,8 @@ type UpstreamServer struct {
 }
 
 type UpstreamPool struct {
+	NginxName         string           `json:"nginx_name,omitempty"`
+	Comments          []ConfigComment  `json:"comments,omitempty"`
 	ID                string           `json:"id"`
 	Name              string           `json:"name"`
 	Protocol          string           `json:"protocol"`
@@ -131,31 +133,41 @@ type SNIRoute struct {
 	UpstreamPort   int      `json:"upstream_port,omitempty"`
 }
 
+// StreamOmissions preserves inherited or absent directives on imported servers.
+type StreamOmissions struct {
+	ConnectTimeout bool `json:"connect_timeout,omitempty"`
+	ProxyTimeout   bool `json:"proxy_timeout,omitempty"`
+	AccessLog      bool `json:"access_log,omitempty"`
+	UDPReusePort   bool `json:"udp_reuseport,omitempty"`
+}
+
 type StreamRule struct {
-	ID                    string     `json:"id"`
-	Name                  string     `json:"name"`
-	Enabled               bool       `json:"enabled"`
-	Protocol              string     `json:"protocol"`
-	ListenAddress         string     `json:"listen_address"`
-	ListenPort            int        `json:"listen_port"`
-	UpstreamPoolID        string     `json:"upstream_pool_id,omitempty"`
-	UpstreamHost          string     `json:"upstream_host,omitempty"`
-	UpstreamPort          int        `json:"upstream_port,omitempty"`
-	ConnectTimeoutSeconds int        `json:"connect_timeout_seconds"`
-	ProxyTimeoutSeconds   int        `json:"proxy_timeout_seconds"`
-	UDPResponses          int        `json:"udp_responses"`
-	ProxyProtocol         bool       `json:"proxy_protocol"`
-	AcceptProxyProtocol   bool       `json:"accept_proxy_protocol"`
-	TrustedProxies        []string   `json:"trusted_proxies"`
-	TLSMode               string     `json:"tls_mode"`
-	CertificateID         string     `json:"certificate_id,omitempty"`
-	SNIRoutes             []SNIRoute `json:"sni_routes"`
-	AccessLog             bool       `json:"access_log"`
-	Allow                 []string   `json:"allow"`
-	Deny                  []string   `json:"deny"`
-	MaxConnections        int        `json:"max_connections"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	Comments              []ConfigComment  `json:"comments,omitempty"`
+	Omissions             *StreamOmissions `json:"omissions,omitempty"`
+	ID                    string           `json:"id"`
+	Name                  string           `json:"name"`
+	Enabled               bool             `json:"enabled"`
+	Protocol              string           `json:"protocol"`
+	ListenAddress         string           `json:"listen_address"`
+	ListenPort            int              `json:"listen_port"`
+	UpstreamPoolID        string           `json:"upstream_pool_id,omitempty"`
+	UpstreamHost          string           `json:"upstream_host,omitempty"`
+	UpstreamPort          int              `json:"upstream_port,omitempty"`
+	ConnectTimeoutSeconds int              `json:"connect_timeout_seconds"`
+	ProxyTimeoutSeconds   int              `json:"proxy_timeout_seconds"`
+	UDPResponses          int              `json:"udp_responses"`
+	ProxyProtocol         bool             `json:"proxy_protocol"`
+	AcceptProxyProtocol   bool             `json:"accept_proxy_protocol"`
+	TrustedProxies        []string         `json:"trusted_proxies"`
+	TLSMode               string           `json:"tls_mode"`
+	CertificateID         string           `json:"certificate_id,omitempty"`
+	SNIRoutes             []SNIRoute       `json:"sni_routes"`
+	AccessLog             bool             `json:"access_log"`
+	Allow                 []string         `json:"allow"`
+	Deny                  []string         `json:"deny"`
+	MaxConnections        int              `json:"max_connections"`
+	CreatedAt             time.Time        `json:"created_at"`
+	UpdatedAt             time.Time        `json:"updated_at"`
 }
 
 type CacheSettings struct {
@@ -209,6 +221,7 @@ type ProxyRedirect struct {
 }
 
 type LocationSettings struct {
+	InheritProxyDefaults   bool           `json:"inherit_proxy_defaults,omitempty"`
 	ProxyBuffering         *bool          `json:"proxy_buffering,omitempty"`
 	ProxyRequestBuffering  *bool          `json:"proxy_request_buffering,omitempty"`
 	ProxyRedirect          *ProxyRedirect `json:"proxy_redirect,omitempty"`
@@ -800,6 +813,9 @@ func ValidateHTTPLocations(rule ProxyRule, pools map[string]UpstreamPool) error 
 func safeToken(value string) bool { return value != "" && !strings.ContainsAny(value, "/\\{};\r\n\t ") }
 
 func ValidateStreamRule(rule StreamRule, certs map[string]CertificateMeta, pools map[string]UpstreamPool) error {
+	if err := validateConfigComments(rule.Comments); err != nil {
+		return err
+	}
 	if !idPattern.MatchString(rule.ID) {
 		return errors.New("Stream 规则 ID 格式不正确")
 	}
@@ -916,9 +932,27 @@ func NormalizeUpstreamPool(pool *UpstreamPool) {
 	}
 }
 
+var upstreamNginxName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$`)
+
+func (p UpstreamPool) ConfigName() string {
+	if p.NginxName != "" {
+		return p.NginxName
+	}
+	if p.Protocol == "stream" {
+		return "fnproxy_stream_" + p.ID
+	}
+	return "fnproxy_up_" + p.ID
+}
+
 func ValidateUpstreamPool(pool UpstreamPool) error {
+	if err := validateConfigComments(pool.Comments); err != nil {
+		return err
+	}
 	if !idPattern.MatchString(pool.ID) {
 		return errors.New("转发服务组 ID 格式不正确")
+	}
+	if pool.NginxName != "" && !upstreamNginxName.MatchString(pool.NginxName) {
+		return errors.New("Nginx upstream 名称不合法")
 	}
 	if len([]rune(pool.Name)) < 1 || len([]rune(pool.Name)) > 80 {
 		return errors.New("转发服务组名称长度必须为 1 到 80 个字符")

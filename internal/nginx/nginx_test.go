@@ -411,7 +411,7 @@ func TestImportedPoolProxyRedirect(t *testing.T) {
 	} {
 		var output strings.Builder
 		loc := domain.LocationSettings{BackendType: "proxy", UpstreamScheme: "http", UpstreamPoolID: "abcdefabcdef", UpstreamPath: tc.uri, ProxyRedirect: &domain.ProxyRedirect{PoolID: "abcdefabcdef", OriginalHost: "Old_Pool", Disabled: tc.disabled}}
-		if err := manager.renderHTTPLocation(&output, domain.ProxyRule{}, "/api/", "prefix", loc, "", nil, 0); err != nil {
+		if err := manager.renderHTTPLocation(&output, domain.ProxyRule{}, "/api/", "prefix", loc, "", nil, 0, nil); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(output.String(), tc.want) {
@@ -437,7 +437,7 @@ func TestLocationBufferingOverridesRuleDefaults(t *testing.T) {
 	} {
 		loc := domain.LocationSettings{BackendType: "proxy", UpstreamScheme: "http", UpstreamHost: "127.0.0.1", UpstreamPort: 8005, ProxyBuffering: tc.response, ProxyRequestBuffering: tc.request}
 		var output strings.Builder
-		err := manager.renderHTTPLocation(&output, domain.ProxyRule{Streaming: tc.streaming, WebSocket: tc.websocket}, "/", "prefix", loc, "", nil, 0)
+		err := manager.renderHTTPLocation(&output, domain.ProxyRule{Streaming: tc.streaming, WebSocket: tc.websocket}, "/", "prefix", loc, "", nil, 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -461,7 +461,7 @@ func TestLocationDirectiveArguments(t *testing.T) {
 	render := func() string {
 		t.Helper()
 		var output strings.Builder
-		if err := New(Paths{}).renderHTTPLocation(&output, domain.ProxyRule{}, "/", "prefix", loc, "", nil, 0); err != nil {
+		if err := New(Paths{}).renderHTTPLocation(&output, domain.ProxyRule{}, "/", "prefix", loc, "", nil, 0, nil); err != nil {
 			t.Fatal(err)
 		}
 		return output.String()

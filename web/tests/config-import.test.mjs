@@ -8,6 +8,8 @@ after(() => { delete globalThis.location; return vite.close(); });
 const { previewImport, configFragment } = await vite.ssrLoadModule("/src/configImport.ts");
 const { parseConfig } = await vite.ssrLoadModule("/src/nginxConfig.ts");
 
+const {createCustomConfig} = await vite.ssrLoadModule("/src/customConfigCreate.ts");
+
 test("unwrap a single scope for an include, keeping comments and original line numbers", () => {
   const source = "# header\nstream # inner scope\n{\n  # retain\n  upstream app { server 127.0.0.1:9000; }\n}\n# tail";
   const result = configFragment(source, parseConfig(source), "http");
@@ -155,4 +157,103 @@ test("infers the scope of included handlers and offers a choice for ambiguous si
   }
   const wrapped = "http { " + shared + " }";
   assert.equal(configFragment(wrapped, parseConfig(wrapped), "stream").sharedScope, false);
+});
+
+const emptyState = {rules: [], stream_rules: []};
+const site = "server {listen 19801; server_name form.test; location / {proxy_pass http://127.0.0.1:19802;}}";
+
+test("automatic creation commits the complete verified preview once", async t => {
+  const paths = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    paths.push(url);
+    const draft = JSON.parse(init.body);
+    assert.equal(draft.new_file_name, "custom-site.conf");
+    assert.equal(draft.rules[0].inherit_nginx_body_size, true);
+    assert.equal(draft.rules[0].root_location.inherit_proxy_defaults, true);
+    if (url.endsWith("/save")) assert.deepEqual(draft.expected, [site]);
+    return Response.json([site]);
+  });
+  assert.deepEqual(await createCustomConfig({name:"custom-site.conf", content:site}, emptyState), {kind:"rules", count:1, pools:0});
+  assert.deepEqual(paths, ["/api/config-import/preview", "/api/config-import/save"]);
+});
+
+test("mixed files, syntax errors and lossy rendering keep the whole original", async t => {
+  const files = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (url.endsWith("/preview")) return Response.json([site.replace("proxy_pass", "proxy_buffering off; proxy_pass")]);
+    assert.equal(url, "/api/custom-configs");
+    const file = JSON.parse(init.body);
+    files.push(file.content);
+    return Response.json(file);
+  });
+  for (const [content, issue] of [
+    [site + "\nserver {\nif ($arg_a) { return 403; }\n}", /第 3 行.*if/],
+    ["server {\nlisten 8080", /第 2 行.*未闭合/],
+    [site, /第 1 行.*proxy_buffering/],
+  ]) {
+    const result = await createCustomConfig({name:"custom-site.conf", content}, emptyState);
+    assert.equal(result.kind, "file");
+    assert.match(result.reason, issue);
+    assert.equal(files.at(-1), content);
+  }
+});
+
+test("a failed commit or unavailable preview never triggers a second write", async t => {
+  let failCommit = false;
+  const paths = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    paths.push(url);
+    if (url.endsWith("/preview") && failCommit) return Response.json([site]);
+    return Response.json({error:"failed"}, {status:failCommit ? 400 : 503});
+  });
+  const file = {name:"custom-site.conf", content:site};
+  await assert.rejects(createCustomConfig(file, emptyState), /failed/);
+  failCommit = true;
+  await assert.rejects(createCustomConfig(file, emptyState), /failed/);
+  assert.deepEqual(paths, ["/api/config-import/preview","/api/config-import/preview","/api/config-import/save"]);
+});
+
+test("a rejected batch points to the failing server and falls back exactly once", async t => {
+  const paths = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    paths.push(url);
+    const data = JSON.parse(init.body);
+    if (url.endsWith("/custom-configs")) return Response.json(data);
+    return data.rules.length > 1 ? Response.json({error:"监听地址冲突"}, {status:400}) : Response.json([site]);
+  });
+  const file = {name:"custom-two.conf", content:site + "\n\n" + site};
+  const result = await createCustomConfig(file, emptyState);
+  assert.match(result.reason, /第 3 行.*监听地址冲突/);
+  assert.deepEqual(paths, ["/api/config-import/preview", "/api/config-import/preview", "/api/custom-configs"]);
+});
+
+test("comments stay with their own form and forward references bind to the pool ID", async t => {
+  const pool = "upstream app {server 127.0.0.1:19802;}";
+  const originalSite = site.replace("127.0.0.1:19802","app").replace("location /", "# 入口 $fnproxy_rule_id\nlocation /");
+  const source = "# 网站\n" + originalSite + " # 站点尾\n# 节点组\n" + pool + "\n# 文件尾";
+  const paths = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    paths.push(url);
+    const {pools:[group],rules:[rule]} = JSON.parse(init.body);
+    assert.equal(group.nginx_name, "app");
+    assert.equal(rule.root_location.upstream_pool_id, group.id);
+    assert.deepEqual(rule.comments.map(c => c.text), ["# 网站","# 入口 $fnproxy_rule_id","# 站点尾"]);
+    assert.deepEqual(group.comments.map(c => c.text), ["# 节点组","# 文件尾"]);
+    return Response.json(["# 节点组\n" + pool + "\n# 文件尾", "# 网站\n" + originalSite + " # 站点尾"]);
+  });
+  assert.equal((await createCustomConfig({name:"custom-app.conf",content:source},emptyState)).kind, "rules");
+  assert.deepEqual(paths,["/api/config-import/preview","/api/config-import/save"]);
+});
+
+test("unsupported pool directives keep comments and all servers in the original file", async t => {
+  const content = "# 上游\nupstream app {\n zone app 64k;\n server 127.0.0.1:8080;\n}\n" + site;
+  const paths = [];
+  t.mock.method(globalThis, "fetch",async (url, init) => {
+    paths.push(url);
+    const file = JSON.parse(init.body);
+    assert.equal(file.content,content);
+    return Response.json(file);
+  });
+  assert.match((await createCustomConfig({name:"custom-app.conf",content},emptyState)).reason,/第 3 行.*zone/);
+  assert.deepEqual(paths,["/api/custom-configs"]);
 });

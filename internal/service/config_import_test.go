@@ -102,3 +102,64 @@ func TestImportSiteAndPoolInOneDraft(t *testing.T) {
 		t.Fatal("duplicate commit")
 	}
 }
+
+func TestAutoImportStreamBatch(t *testing.T) {
+	s := testService(t)
+	omissions := &domain.StreamOmissions{ConnectTimeout: true, ProxyTimeout: true, AccessLog: true, UDPReusePort: true}
+	tcp := domain.StreamRule{ID: "ab1234567890", Name: "tcp", Protocol: "tcp", Enabled: true, ListenPort: 19885, UpstreamHost: "127.0.0.1", UpstreamPort: 19881, ConnectTimeoutSeconds: 60, ProxyTimeoutSeconds: 600, Omissions: omissions}
+	udp := tcp
+	udp.ID, udp.Name, udp.Protocol = "ab1234567891", "udp", "udp"
+	input := ConfigImport{NewFileName: "custom-two.stream", Streams: []domain.StreamRule{tcp, udp}}
+	preview, err := s.ImportConfig(input, false)
+	if err != nil || len(preview) != 2 || len(s.State().StreamRules) != 0 {
+		t.Fatalf("preview %v, %v", preview, err)
+	}
+	for _, text := range preview {
+		for _, extra := range []string{"proxy_connect_timeout", "proxy_timeout", "access_log", "reuseport"} {
+			if strings.Contains(text, extra) {
+				t.Fatalf("added %s: %s", extra, text)
+			}
+		}
+	}
+	input.Expected = preview
+	input.Streams[1].UpstreamPort++
+	if _, err := s.ImportConfig(input, true); err == nil || len(s.State().StreamRules) != 0 {
+		t.Fatal("committed a changed batch")
+	}
+	input.Streams[1].UpstreamPort--
+	if _, err := s.ImportConfig(input, true); err != nil || len(s.State().StreamRules) != 2 {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func TestCommentedSiteAndNamedPoolRemainLinkedAfterEdit(t *testing.T) {
+	s := testService(t)
+	pool := domain.UpstreamPool{ID: "0123456789ab", Name: "web", NginxName: "web", Protocol: "http", Servers: []domain.UpstreamServer{{Host: "127.0.0.1", Port: 9980}},
+		Comments: []domain.ConfigComment{{Anchor: "/upstream:0/server:0", Text: "# 主节点", Inline: true}}}
+	site := ProxyRule{ID: "abcdef123456", Name: "site", Domains: []string{"pool.test"}, ListenPort: 19196, UpstreamPoolID: pool.ID, Enabled: true,
+		Comments: []domain.ConfigComment{{Anchor: "/server:0/listen:0", Text: "# 入口", Inline: true}, {Anchor: "/server:0/}", Text: "# 尾注", After: true}}}
+	input := ConfigImport{NewFileName: "custom-pool.conf", Pools: []domain.UpstreamPool{pool}, Rules: []ProxyRule{site}}
+	preview, err := s.ImportConfig(input, false)
+	if err != nil || len(preview) != 2 || !strings.Contains(preview[0], "upstream web {") || !strings.Contains(preview[0], "; # 主节点") || !strings.Contains(preview[1], "proxy_pass http://web;") || !strings.HasSuffix(preview[1], "}\n# 尾注\n") {
+		t.Fatalf("preview %v: %v", err, preview)
+	}
+	input.Expected = preview
+	if _, err = s.ImportConfig(input, true); err != nil {
+		t.Fatal(err)
+	}
+	pool.Name, pool.NginxName, pool.Comments = "新名称", "", nil
+	if _, err = s.UpdateUpstreamPool(pool.ID, pool); err != nil {
+		t.Fatal(err)
+	}
+	site.ListenPort, site.Comments = 19197, nil
+	if _, err = s.UpdateRule(site.ID, site); err != nil {
+		t.Fatal(err)
+	}
+	text, err := s.RuleConfig(site.ID, false)
+	if err != nil || !strings.Contains(text, "19197; # 入口") || !strings.Contains(text, "proxy_pass http://web;") || !strings.Contains(text, "# 尾注") {
+		t.Fatalf("updated site %v %s", err, text)
+	}
+	if got := s.State().UpstreamPools[0]; got.ConfigName() != "web" || len(got.Comments) != 1 {
+		t.Fatalf("updated pool: %#v", got)
+	}
+}

@@ -122,6 +122,7 @@ export interface HeaderSetting {
   always: boolean;
 }
 export interface LocationSettings {
+  inherit_proxy_defaults?: boolean;
   connect_timeout_seconds?: number;
   read_timeout_seconds?: number;
   send_timeout_seconds?: number;
@@ -198,7 +199,11 @@ export type GroupField = "listen_type" | "listen_port" | "tls" | "certificate_id
 export interface RuleGroup {
  id: string; name: string; listen_type?: ListenType; listen_port: number; tls: boolean; http2: boolean; certificate_id: string;
 }
+export interface ConfigComment {anchor: string; text: string; inline?: boolean; after?: boolean}
+
 export interface ProxyRuleInput {
+  comments?: ConfigComment[];
+  inherit_nginx_body_size?: boolean;
   listen_type?: ListenType;
   group_id?: string;
   inherit_fields?: GroupField[];
@@ -289,6 +294,8 @@ export interface UpstreamServer {
   down: boolean;
 }
 export interface UpstreamPoolInput {
+  comments?: ConfigComment[];
+  nginx_name?: string;
   name: string;
   protocol: "http" | "stream";
   strategy: "round_robin" | "least_conn" | "ip_hash" | "hash" | "random";
@@ -311,6 +318,8 @@ export interface SNIRoute {
   upstream_port: number;
 }
 export interface StreamRuleInput {
+  comments?: ConfigComment[];
+  omissions?: {connect_timeout?: boolean; proxy_timeout?: boolean; access_log?: boolean; udp_reuseport?: boolean};
   name: string;
   enabled: boolean;
   protocol: "tcp" | "udp";

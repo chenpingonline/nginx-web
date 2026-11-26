@@ -48,6 +48,7 @@ function show(pool: UpstreamPool | null = null) {
   editing.value = pool;
   Object.assign(
     form,
+    { comments: undefined, nginx_name: undefined },
     pool
       ? structuredClone(toRaw(pool))
       : {
